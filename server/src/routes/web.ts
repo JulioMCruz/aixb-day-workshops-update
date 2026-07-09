@@ -431,6 +431,18 @@ function appPage(config: AppConfig): string {
       .activity-log .log-entry.error .log-icon { color: #ff6b6b; }
       .activity-log .log-entry.error .log-msg { color: #ffb3b3; }
 
+      .log-link {
+        color: var(--cyan);
+        text-decoration: none;
+        border-bottom: 1px dotted var(--cyan);
+        margin-left: 4px;
+      }
+      .log-link:hover {
+        color: var(--magenta);
+        border-bottom-color: var(--magenta);
+      }
+      .activity-log .log-entry.ok .log-link { color: #6cf09a; border-bottom-color: #6cf09a; }
+
       .live-hint {
         margin-top: 12px;
         padding: 8px 12px;
@@ -575,7 +587,7 @@ function appPage(config: AppConfig): string {
         let activePaymentMode = { live: false, ready: false, label: "fixture" };
         let eventCount = 0;
 
-        function logEvent(level, message) {
+        function logEvent(level, message, link) {
           if (!activityLog) return;
           eventCount += 1;
           const time = new Date().toTimeString().slice(0, 8);
@@ -586,10 +598,16 @@ function appPage(config: AppConfig): string {
           }
           const entry = document.createElement("div");
           entry.className = "log-entry " + level;
+          let msgHtml = escapeHtml(message);
+          if (link && link.url) {
+            const safeUrl = escapeHtml(link.url);
+            const linkText = escapeHtml(link.text || link.url);
+            msgHtml += ' <a class="log-link" href="' + safeUrl + '" target="_blank" rel="noopener noreferrer">' + linkText + ' ↗</a>';
+          }
           entry.innerHTML =
             '<span class="log-time">' + time + '</span>' +
             '<span class="log-icon">' + icon + '</span>' +
-            '<span class="log-msg">' + escapeHtml(message) + '</span>';
+            '<span class="log-msg">' + msgHtml + '</span>';
           activityLog.appendChild(entry);
           activityLog.scrollTop = activityLog.scrollHeight;
         }
@@ -773,6 +791,7 @@ function appPage(config: AppConfig): string {
           try {
             const result = await window.aixbWallet.payWithX402(jobTask.value, jobInput.value);
             if (result.ok && result.txHash) {
+              const baseScanUrl = 'https://sepolia.basescan.org/tx/' + result.txHash;
               paymentOutput.innerHTML =
                 '<div class="status-row">' +
                   '<span class="chip">HTTP: ' + result.status + '</span>' +
@@ -780,6 +799,7 @@ function appPage(config: AppConfig): string {
                   '<span class="chip">tx: ' + result.txHash.slice(0, 12) + '...</span>' +
                 '</div>' +
                 '<p class="mentor-text">Pago liquidado onchain con TU wallet. Job completado y feedback ERC-8004 emitido.</p>' +
+                '<p class="mentor-text"><a class="log-link" href="' + baseScanUrl + '" target="_blank" rel="noopener noreferrer">Ver transacción en BaseScan Sepolia ↗</a></p>' +
                 '<pre class="mentor-text">' + escapeHtml(JSON.stringify(result.body, null, 2)) + '</pre>';
             } else {
               paymentOutput.innerHTML = '<p class="error">Pago no liquidado: ' + escapeHtml(result.error || "?") + '</p>';

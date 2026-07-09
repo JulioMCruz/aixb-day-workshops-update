@@ -7,7 +7,8 @@ import { ExactEvmScheme, toClientEvmSigner } from "@x402/evm";
 import { wrapFetchWithPaymentFromConfig } from "@x402/fetch";
 
 type LogLevel = "info" | "ok" | "warn" | "error";
-type LogFn = (level: LogLevel, message: string) => void;
+type LogLink = { url: string; text: string };
+type LogFn = (level: LogLevel, message: string, link?: LogLink) => void;
 
 declare global {
   interface Window {
@@ -241,8 +242,11 @@ async function payWithX402(task: string, input: string): Promise<{
       };
       if (decoded.transaction) {
         txHash = decoded.transaction;
-        log("ok", `Tx settled onchain: ${txHash.slice(0, 20)}...`);
-        log("info", `BaseScan: https://sepolia.basescan.org/tx/${txHash}`);
+        const baseScanUrl = `https://sepolia.basescan.org/tx/${decoded.transaction}`;
+        log("ok", `Tx settled onchain: ${decoded.transaction.slice(0, 20)}...`, {
+          url: baseScanUrl,
+          text: "BaseScan ↗"
+        });
       }
       if (decoded.network) network = decoded.network;
       if (decoded.payer) {
@@ -259,7 +263,13 @@ async function payWithX402(task: string, input: string): Promise<{
 
   if (feedback) {
     const fb = feedback as { value?: number; tag1?: string; proofOfPayment?: { txHash?: string } };
-    log("ok", `ERC-8004 feedback: value=${fb.value ?? "?"} tag1=${fb.tag1 ?? "?"} txHash=${fb.proofOfPayment?.txHash?.slice(0, 20) ?? "?"}...`);
+    const fbTx = fb.proofOfPayment?.txHash;
+    const fbLink = fbTx ? { url: `https://sepolia.basescan.org/tx/${fbTx}`, text: "proof onchain ↗" } : undefined;
+    log(
+      "ok",
+      `ERC-8004 feedback: value=${fb.value ?? "?"} tag1=${fb.tag1 ?? "?"} txHash=${fbTx?.slice(0, 20) ?? "?"}...`,
+      fbLink
+    );
   }
 
   if (status !== 201) {
