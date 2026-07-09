@@ -21,6 +21,29 @@ repository, why we made it, and how to run the workshop from end to end.
 >    step of the payment (probe 402 → decoded PAYMENT-REQUIRED → signature →
 >    settle → BaseScan URL → ERC-8004 feedback).
 
+## Code map — one new file per topic
+
+Frutero's original code is respected: every new capability lives in a
+**new file**, so during the demo you can open one file and show one
+topic. Links point to the `w04-update` branch:
+
+| To show... | Open | What to look at |
+|---|---|---|
+| A REAL x402 payment from the browser | [`server/src/web/x402-client.ts`](https://github.com/JulioMCruz/aixb-day-workshops-update/blob/w04-update/server/src/web/x402-client.ts) | `payWithX402()`: probe 402 → decode the machine-readable invoice → sign EIP-3009 with MetaMask (no gas) → facilitator settles onchain → BaseScan link |
+| The same x402 payment, server-side (no browser wallet) | [`server/src/routes/x402-pay.ts`](https://github.com/JulioMCruz/aixb-day-workshops-update/blob/w04-update/server/src/routes/x402-pay.ts) | `POST /x402/pay`: signs with `X402_BUYER_PRIVATE_KEY` and returns the full step log |
+| How the server CHARGES with x402 (the 402 gate) | [`server/src/integrations/x402-live.ts`](https://github.com/JulioMCruz/aixb-day-workshops-update/blob/w04-update/server/src/integrations/x402-live.ts) | `createLiveX402Middleware()`: the official @x402/hono middleware answering 402 and settling through the facilitator |
+| How the agent wallet registers its ERC-8004 identity | [`server/src/integrations/erc8004-onchain.ts`](https://github.com/JulioMCruz/aixb-day-workshops-update/blob/w04-update/server/src/integrations/erc8004-onchain.ts) | `serverRegisterAgent()`: sign `register(agentURI)` with `AGENT_PRIVATE_KEY`, mint the identity NFT, recover the `agentId` from the event. `lookupAgent()`: read the registry |
+| The identity HTTP endpoints | [`server/src/routes/agents.ts`](https://github.com/JulioMCruz/aixb-day-workshops-update/blob/w04-update/server/src/routes/agents.ts) | `GET /agents/:address` (lookup) and `POST /agents/register-server` (register + step log) |
+| The LLM fallback that keeps the demo alive | [`server/src/integrations/llm.ts`](https://github.com/JulioMCruz/aixb-day-workshops-update/blob/w04-update/server/src/integrations/llm.ts) | `callLLM()` cascade: Nebius if configured, local fixture otherwise |
+
+Original files keep Frutero's code. The wiring changes are small and
+the relevant ones carry a `// w04-update` comment: `app.ts` (registers
+the new routes), `jobs.ts` (applies the live gate when the switch is
+ON), `erc8004.ts` (real registry tag), `nebius.ts` (delegates to the
+cascade), `x402.ts` (derives the seller address from
+`AGENT_PRIVATE_KEY`), `web.ts` (the Gate de pagos UI panel and
+activity log).
+
 ## Step 0 — Switch to the `w04-update` branch
 
 The `main` branch of this repo is a clean fork of Frutero's repo. All the
@@ -469,13 +492,13 @@ tx on the server. The NFT owner is the seller (which matches
 
 The whole flow is ~200 lines of code across 4 files:
 
-- `server/src/integrations/erc8004.ts` — `lookupAgent()` reads
+- `server/src/integrations/erc8004-onchain.ts` — `lookupAgent()` reads
   `balanceOf(address)` on the registry, then walks back the `Registered`
   event log in 2000-block chunks to recover `agentId`.
   `buildSelfRegistrationURI()` builds the registration JSON inline
   (no IPFS). `serverRegisterAgent()` signs and sends the `register()`
   tx with `AGENT_PRIVATE_KEY` and narrates each step for the UI log.
-- `server/src/routes/jobs.ts` — 3 new endpoints:
+- `server/src/routes/agents.ts` — 3 endpoints:
   - `GET /agents/registry-info` — static helper with the contract
     address, chainId, and BaseScan URL.
   - `GET /agents/:address` — onchain lookup; pre-builds
@@ -520,50 +543,63 @@ The ERC-8004 contract addresses on testnet (verified July 2026):
 All the changes below live in the `w04-update` branch, in the `server/`
 directory. See `git diff main..w04-update -- server` for the full diff.
 
-### New files
+### New files (all the new capabilities live here)
 
-- `server/public/x402-client.js` — esbuild bundle of the browser wallet
-  client (viem + x402/evm + x402/fetch). Served at `GET /x402-client.js`.
 - `server/src/web/x402-client.ts` — TypeScript source of the browser
-  wallet client. Exports `window.aixbWallet` with 9 methods
-  (`isConnected`, `getAddress`, `getChainId`, `connectWallet`,
-  `disconnectWallet`, `switchToBaseSepolia`, `payWithX402`,
-  `onAccountChanged`, `onChainChanged`).
+  wallet client (`window.aixbWallet`: connect, switch chain,
+  `payWithX402`, `lookupAgent8004`). Bundled to
+  `server/public/x402-client.js` by `npm run build:web` and served at
+  `GET /x402-client.js`.
 - `server/src/routes/x402-pay.ts` — server-side live payment endpoint
-  that runs the full probe → sign → settle flow and returns a 17-entry
-  activity log plus the onchain transaction hash.
+  (`POST /x402/pay`) that runs the full probe → sign → settle flow and
+  returns a step-by-step activity log plus the onchain tx hash.
+- `server/src/integrations/x402-live.ts` — the REAL x402 gate:
+  `createLiveX402Middleware()` (official @x402/hono middleware for
+  `POST /jobs`) and `livePaymentMode()` (the mode summary shown by
+  `/payment-mode` and `/services`).
+- `server/src/integrations/erc8004-onchain.ts` — the REAL ERC-8004
+  identity: `lookupAgent()`, `buildSelfRegistrationURI()`,
+  `serverRegisterAgent()` and the registry constants.
+- `server/src/routes/agents.ts` — the identity endpoints:
+  `GET /agents/registry-info`, `GET /agents/:address`,
+  `POST /agents/register-server`.
+- `server/src/integrations/llm.ts` — the `callLLM()` provider cascade
+  with local-fixture fallback.
+- `server/scripts/check-inline-js.mjs` — build-time lint that parses
+  the inline `<script>` blocks of the web page and fails on syntax
+  errors before they reach the browser.
 
-### Modified files
+### Modified files (wiring only, Frutero's code respected)
 
-- `server/src/integrations/nebius.ts` — replaced `callNebius()` with a
-  `callLLM()` cascade that tries the configured provider (Nebius) and
-  falls back to a local fixture, so the demo never blocks on an LLM key.
+- `server/src/app.ts` — registers the new routes (`agents.ts`,
+  `x402-pay.ts`) and serves `GET /x402-client.js`.
+- `server/src/routes/jobs.ts` — applies the live x402 middleware when
+  the payment switch is ON and `X402_MODE=base-sepolia`; adds the
+  testnet receipt to the paid job response.
+- `server/src/integrations/erc8004.ts` — the fixture helpers are
+  unchanged; the default registry tag now points to the real Base
+  Sepolia IdentityRegistry (from `erc8004-onchain.ts`).
+- `server/src/integrations/nebius.ts` — `callNebius()` keeps its name
+  and signature but delegates to the `callLLM()` cascade in `llm.ts`.
+- `server/src/integrations/x402.ts` — `x402PayTo()` can derive the
+  seller address from `AGENT_PRIVATE_KEY`.
+- `server/src/routes/web.ts` — the Gate de pagos panel: wallet buttons,
+  ERC-8004 panel, and the color-coded activity log.
 - `server/scripts/create-wallet.ts` — fixed the EVM address derivation
   bug (`sha256(privateKey).slice(-40)` → `keccak256(publicKey)` via
   viem's `privateKeyToAccount`).
-- `server/src/app.ts` — added `GET /x402-client.js` route.
-- `server/src/routes/web.ts` — added four wallet buttons (Connect wallet,
-  Pay with x402, Switch to Base Sepolia, Disconnect), the activity log
-  panel with color-coded entries, and the wallet-info paragraph.
-- `server/src/types.ts` — added the `paymentsEnabled` / `mode` typing
-  for the payment-mode endpoint.
-- `server/.env.example` — documented `AGENT_PRIVATE_KEY`,
-  `X402_PAY_TO` (the agent wallet) and `X402_BUYER_PRIVATE_KEY`.
-- `server/.gitignore` — added `.aixb-wallet.fixture.json` and
-  `.env.backup-*` patterns.
-- `server/package.json` — added `npm run build:web` script.
-- `server/README.md` — added a section pointing to this `STEPS.md` and
-  summarising the live settlement flow.
+- `server/src/types.ts`, `server/.env.example`, `server/.gitignore`,
+  `server/package.json`, `server/README.md` — typing, env docs
+  (`AGENT_PRIVATE_KEY`, `X402_PAY_TO`, `X402_BUYER_PRIVATE_KEY`),
+  ignore patterns, `build:web` / `check:inline-js` scripts, and the
+  pointer to this `STEPS.md`.
 
 ### What we deliberately did NOT change
 
-- `server/src/integrations/x402.ts` — the @x402/hono middleware and
-  verifier work as-is. The browser-signed `PAYMENT-SIGNATURE` is
-  accepted by the same middleware, with no changes needed.
-- `server/src/integrations/erc8004.ts` — the ERC-8004 identity card and
-  the `erc8004Feedback` in paid job responses are unchanged.
 - `server/src/integrations/github.ts`, `brain.ts`, `agent.ts`,
   `mentor.ts`, `mentor-agent.ts` — untouched.
+- The fixture x402 flow (`x402-fixture-paid`) — it still works exactly
+  like Frutero's original, so the workshop runs without funds.
 - The whole `workshops/` directory except for this `STEPS.md` file.
 - The whole `README.md` at the root of the repo.
 

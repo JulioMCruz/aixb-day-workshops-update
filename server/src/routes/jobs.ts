@@ -1,18 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { HTTPFacilitatorClient, x402ResourceServer, type RoutesConfig } from "@x402/core/server";
-import type { Network } from "@x402/core/types";
-import { ExactEvmScheme } from "@x402/evm/exact/server";
-import { paymentMiddleware } from "@x402/hono";
-import type { Context, MiddlewareHandler } from "hono";
-import { createAgentRegistration, createFeedback, lookupAgent, buildSelfRegistrationURI, serverRegisterAgent, ERC8004_IDENTITY_REGISTRY_BASESEPOLIA, type RegisterStep } from "../integrations/erc8004.js";
+import type { Context } from "hono";
+import { createAgentRegistration, createFeedback } from "../integrations/erc8004.js";
 import { readWallet } from "../integrations/wallet.js";
+// w04-update: the real Base Sepolia payment gate lives in x402-live.ts.
+import { createLiveX402Middleware, livePaymentMode } from "../integrations/x402-live.js";
 import {
   createPaymentRequired,
   createX402Requirement,
   encodePaymentRequired,
   verifyX402Payment,
   x402FacilitatorUrl,
-  x402LiveReady,
   x402ModeLabel,
   x402Network,
   x402Price,
@@ -95,57 +92,6 @@ function paymentSignature(c: Context): string | undefined {
   return c.req.header("PAYMENT-SIGNATURE") ?? c.req.header("X-PAYMENT");
 }
 
-function livePaymentMode(config: AppConfig) {
-  return {
-    label: x402ModeLabel(config),
-    live: x402UsesLiveBaseSepolia(config),
-    ready: x402LiveReady(config),
-    network: x402Network(config),
-    facilitator: x402FacilitatorUrl(config),
-    payToConfigured: Boolean(x402PayTo(config, "").trim())
-  };
-}
-
-function createLiveX402Middleware(config: AppConfig): MiddlewareHandler | null {
-  // The seller address comes from AGENT_PRIVATE_KEY (derived) or X402_PAY_TO.
-  const payTo = x402PayTo(config, "").trim();
-  if (!x402UsesLiveBaseSepolia(config) || !payTo) return null;
-
-  const network = x402Network(config) as Network;
-  const facilitatorClient = new HTTPFacilitatorClient({
-    url: x402FacilitatorUrl(config)
-  });
-  const resourceServer = new x402ResourceServer(facilitatorClient).register(network, new ExactEvmScheme());
-  const routes: RoutesConfig = {
-    "POST /jobs": {
-      accepts: {
-        scheme: "exact",
-        price: x402Price(config, "$0.001"),
-        network,
-        payTo,
-        maxTimeoutSeconds: 120
-      },
-      description: "Run a Mentor Agent job through the AI x Blockchain Day Base Sepolia x402 test.",
-      mimeType: "application/json",
-      serviceName: "AI x Blockchain Day Mentor Agent",
-      unpaidResponseBody: () => ({
-        contentType: "application/json",
-        body: {
-          ok: false,
-          status: "payment_required",
-          protocol: "x402",
-          integration: "base-sepolia-live",
-          network,
-          facilitator: x402FacilitatorUrl(config),
-          message: "This live Base Sepolia test requires an x402 payment signature."
-        }
-      })
-    }
-  };
-
-  return paymentMiddleware(routes, resourceServer);
-}
-
 export function registerJobRoutes(app: App, config: AppConfig): void {
   const jobs = new Map<string, JobRecord>();
   let paymentsEnabled = false;
@@ -156,82 +102,6 @@ export function registerJobRoutes(app: App, config: AppConfig): void {
     if (unavailable) return unavailable;
 
     return c.json(createAgentRegistration(config));
-  });
-
-  // Static helper for the workshop demo. Returns the IdentityRegistry address
-  // and the suggested self-registration URI for the *workshop's own agent*
-  // so the UI can show the address without an extra round trip.
-  // NOTE: this route must be registered BEFORE the parameterized :address
-  // route, otherwise Hono matches "registry-info" as the address param.
-  app.get("/agents/registry-info", (c) => {
-    const unavailable = requireStage(c, config, 4);
-    if (unavailable) return unavailable;
-
-    return c.json({
-      ok: true,
-      registry: ERC8004_IDENTITY_REGISTRY_BASESEPOLIA,
-      chainId: 84532,
-      network: "base-sepolia",
-      baseScanContract: `https://sepolia.basescan.org/address/${ERC8004_IDENTITY_REGISTRY_BASESEPOLIA}`
-    });
-  });
-
-  // ERC-8004 onchain lookup. Reads the IdentityRegistry on Base Sepolia.
-  // Used by the workshop UI to verify whether a wallet has self-registered
-  // an agent identity. See erc8004.ts for the contract address.
-  app.get("/agents/:address", async (c) => {
-    const unavailable = requireStage(c, config, 4);
-    if (unavailable) return unavailable;
-
-    const raw = c.req.param("address");
-    const result = await lookupAgent(config, raw);
-    if (!result.ok) {
-      return c.json({ ok: false, error: result.error }, 400);
-    }
-    return c.json({
-      ok: true,
-      network: result.network,
-      chainId: result.chainId,
-      registry: result.registry,
-      address: result.address,
-      registered: result.registered,
-      agentId: result.agentId,
-      agentURI: result.agentURI,
-      baseScanToken: result.baseScanToken,
-      registrationTxHash: result.registrationTxHash,
-      // Pre-built data: URL with the agentURI the student can register with.
-      // null when the student is already registered.
-      selfRegistrationURI: result.registered
-        ? null
-        : buildSelfRegistrationURI(config, result.address)
-    });
-  });
-
-  // Server-side agent registration: AGENT_PRIVATE_KEY signs and sends the
-  // tx from the seller wallet. The resulting NFT owner is the seller, which
-  // matches X402_PAY_TO. This is the "real" identity for the agent that
-  // receives x402 payments.
-  app.post("/agents/register-server", async (c) => {
-    const unavailable = requireStage(c, config, 4);
-    if (unavailable) return unavailable;
-    // Step-by-step log replayed in the web activity card so participants
-    // can follow what the server did on their behalf (same pattern as /x402/pay).
-    const steps: RegisterStep[] = [];
-    if (!config.env.AGENT_PRIVATE_KEY) {
-      return c.json({ ok: false, error: "AGENT_PRIVATE_KEY not set in .env", log: steps }, 400);
-    }
-    try {
-      const result = await serverRegisterAgent(config, (step) => steps.push(step));
-      return c.json({
-        ok: true,
-        ...result,
-        baseScanToken: `https://sepolia.basescan.org/token/${ERC8004_IDENTITY_REGISTRY_BASESEPOLIA}?a=${result.owner}`,
-        log: steps
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return c.json({ ok: false, error: message, log: steps }, 500);
-    }
   });
 
   app.get("/payment-mode", (c) => {

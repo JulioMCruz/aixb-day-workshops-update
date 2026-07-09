@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { stageCapabilities } from "./config.js";
 import { registerAgentRoutes } from "./routes/agent.js";
+// w04-update: ERC-8004 identity routes (see routes/agents.ts).
+import { registerAgentIdentityRoutes } from "./routes/agents.js";
 import { registerBrainRoutes } from "./routes/brain.js";
 import { registerJobRoutes } from "./routes/jobs.js";
 import { registerMentorAgentRoutes } from "./routes/mentor-agent.js";
@@ -51,6 +53,7 @@ export function createApp(config: AppConfig): Hono {
   registerMentorAgentRoutes(app, config);
   registerMentorRoutes(app, config);
   registerJobRoutes(app, config);
+  registerAgentIdentityRoutes(app, config);
   registerX402PayRoute(app, config);
 
   return app;
