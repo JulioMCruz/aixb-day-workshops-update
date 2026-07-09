@@ -102,12 +102,13 @@ function livePaymentMode(config: AppConfig) {
     ready: x402LiveReady(config),
     network: x402Network(config),
     facilitator: x402FacilitatorUrl(config),
-    payToConfigured: Boolean(config.env.X402_PAY_TO?.trim())
+    payToConfigured: Boolean(x402PayTo(config, "").trim())
   };
 }
 
 function createLiveX402Middleware(config: AppConfig): MiddlewareHandler | null {
-  const payTo = config.env.X402_PAY_TO?.trim();
+  // The seller address comes from AGENT_PRIVATE_KEY (derived) or X402_PAY_TO.
+  const payTo = x402PayTo(config, "").trim();
   if (!x402UsesLiveBaseSepolia(config) || !payTo) return null;
 
   const network = x402Network(config) as Network;
@@ -308,7 +309,7 @@ export function registerJobRoutes(app: App, config: AppConfig): void {
           status: "x402_live_not_configured",
           protocol: "x402",
           integration: "base-sepolia-live",
-          message: "Set X402_PAY_TO to a seller wallet address before enabling Base Sepolia live mode."
+          message: "Set AGENT_PRIVATE_KEY (or X402_PAY_TO) to the agent wallet before enabling Base Sepolia live mode."
         },
         500
       );

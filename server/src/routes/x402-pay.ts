@@ -6,7 +6,7 @@ import { wrapFetchWithPayment } from "@x402/fetch";
 import { privateKeyToAccount } from "viem/accounts";
 import type { AppConfig } from "../types.js";
 import { requireStage, type App } from "../workshop-gates.js";
-import { x402Network } from "../integrations/x402.js";
+import { x402Network, x402PayTo } from "../integrations/x402.js";
 
 type PayLogEntry = {
   at: string;
@@ -53,8 +53,11 @@ export function registerX402PayRoute(app: App, config: AppConfig): void {
         return c.json({ ok: false, log, error: "Set X402_MODE=base-sepolia before calling /x402/pay." }, 400);
       }
 
-      const payTo = requiredString(config.env.X402_PAY_TO, "X402_PAY_TO");
-      appendLog(log, { level: "info", message: `Seller (X402_PAY_TO): ${payTo}` });
+      const payTo = x402PayTo(config, "").trim();
+      if (!payTo) {
+        throw new Error("Missing agent wallet. Set AGENT_PRIVATE_KEY (or X402_PAY_TO) in server/.env before calling /x402/pay.");
+      }
+      appendLog(log, { level: "info", message: `Seller (agent wallet): ${payTo}` });
 
       const buyerKey = privateKey(requiredString(config.env.X402_BUYER_PRIVATE_KEY, "X402_BUYER_PRIVATE_KEY"));
       const account = privateKeyToAccount(buyerKey);

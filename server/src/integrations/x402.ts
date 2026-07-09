@@ -46,7 +46,7 @@ export function x402UsesLiveBaseSepolia(config: AppConfig): boolean {
 }
 
 export function x402LiveReady(config: AppConfig): boolean {
-  return x402UsesLiveBaseSepolia(config) && Boolean(config.env.X402_PAY_TO?.trim());
+  return x402UsesLiveBaseSepolia(config) && Boolean(x402PayTo(config, "").trim());
 }
 
 export function x402FacilitatorUrl(config: AppConfig): string {
