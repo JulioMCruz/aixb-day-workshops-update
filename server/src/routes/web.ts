@@ -55,7 +55,6 @@ function paymentPanel(config: AppConfig): string {
           </p>
           <div class="button-row">
             <button id="erc8004-check" type="button">Check 8004 registration</button>
-            <button id="erc8004-register" type="button" class="primary-action" hidden>Register on 8004</button>
             <button id="erc8004-register-server" type="button" class="primary-action" hidden>Register seller agent (server-side)</button>
           </div>
           <pre class="erc8004-output" id="erc8004-output" hidden></pre>
@@ -642,7 +641,6 @@ function appPage(config: AppConfig): string {
         const agentWalletInfo = document.querySelector("#agent-wallet-info");
         const erc8004Panel = document.querySelector("#erc8004-panel");
         const erc8004Check = document.querySelector("#erc8004-check");
-        const erc8004Register = document.querySelector("#erc8004-register");
         const erc8004Output = document.querySelector("#erc8004-output");
         const debugOverlay = document.querySelector("#debug-overlay");
         let activePaymentMode = { live: false, ready: false, label: "fixture" };
@@ -1012,13 +1010,9 @@ function appPage(config: AppConfig): string {
                 erc8004Output.textContent =
                   "NO REGISTRADO\\n" +
                   "  address: " + addr + "\\n" +
-                  "  Hacé click en 'Register on 8004' para registrar tu wallet onchain.\\n" +
-                  "  Vas a firmar una tx que crea un NFT ERC-721 a tu nombre.";
+                  "  Hacé click en 'Register seller agent (server-side)' para registrar el agent onchain.\\n" +
+                  "  El server firma con AGENT_PRIVATE_KEY — el owner del NFT es la seller wallet.";
               }
-            }
-            // Show the Register button only when not registered.
-            if (erc8004Register) {
-              erc8004Register.hidden = result.registered;
             }
           } finally {
             if (erc8004Check) erc8004Check.disabled = false;
@@ -1054,29 +1048,6 @@ function appPage(config: AppConfig): string {
             }
           } finally {
             if (btn) btn.disabled = false;
-          }
-        }
-
-        async function registerErc8004Handler() {
-          if (!window.aixbWallet) {
-            logEvent("error", "Wallet client no cargado. Refrescá la página.");
-            return;
-          }
-          if (erc8004Register) erc8004Register.disabled = true;
-          try {
-            const result = await window.aixbWallet.registerAgent8004();
-            if (!result.ok) {
-              if (erc8004Output) {
-                erc8004Output.hidden = false;
-                erc8004Output.className = "erc8004-output error";
-                erc8004Output.textContent = "Register failed: " + (result.error || "unknown");
-              }
-              return;
-            }
-            // Refresh the panel with the new state.
-            await checkErc8004Handler();
-          } finally {
-            if (erc8004Register) erc8004Register.disabled = false;
           }
         }
 
@@ -1135,14 +1106,6 @@ function appPage(config: AppConfig): string {
           erc8004Check.addEventListener("click", () => {
             checkErc8004Handler().catch((error) => {
               logEvent("error", "Check 8004 error: " + (error.message || error));
-            });
-          });
-        }
-
-        if (erc8004Register) {
-          erc8004Register.addEventListener("click", () => {
-            registerErc8004Handler().catch((error) => {
-              logEvent("error", "Register 8004 error: " + (error.message || error));
             });
           });
         }
