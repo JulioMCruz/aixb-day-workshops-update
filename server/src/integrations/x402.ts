@@ -1,3 +1,5 @@
+import { privateKeyToAccount } from "viem/accounts";
+import { configured } from "../config.js";
 import type { AppConfig } from "../types.js";
 
 export type X402Mode = "fixture" | "base-sepolia";
@@ -60,7 +62,24 @@ export function x402Price(config: AppConfig, fallback: string): string {
 }
 
 export function x402PayTo(config: AppConfig, fallbackAddress: string): string {
+  // If AGENT_PRIVATE_KEY is set, derive the seller address from it
+  // (so the user can configure the agent with one env var instead of
+  // having to also figure out the matching public address).
+  if (configured(config.env.AGENT_PRIVATE_KEY)) {
+    try {
+      const account = privateKeyToAccount(normalizePrivateKey(config.env.AGENT_PRIVATE_KEY ?? ""));
+      return account.address;
+    } catch {
+      // Fall through to the explicit X402_PAY_TO.
+    }
+  }
   return config.env.X402_PAY_TO ?? fallbackAddress;
+}
+
+function normalizePrivateKey(value: string): `0x${string}` {
+  const trimmed = value.trim();
+  if (trimmed.startsWith("0x")) return trimmed as `0x${string}`;
+  return `0x${trimmed}` as `0x${string}`;
 }
 
 export function createX402Requirement({

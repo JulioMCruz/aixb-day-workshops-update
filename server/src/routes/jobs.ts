@@ -210,11 +210,13 @@ export function registerJobRoutes(app: App, config: AppConfig): void {
     const unavailable = requireStage(c, config, 4);
     if (unavailable) return unavailable;
 
+    const mode = livePaymentMode(config);
     return c.json({
       workshop: 4,
       protocol: "x402",
       paymentsEnabled,
-      mode: livePaymentMode(config),
+      mode,
+      agentWallet: config.env.X402_PAY_TO?.trim() ?? null,
       toggle: "POST /payment-mode",
       fixturePaymentSignature: "x402-fixture-paid"
     });

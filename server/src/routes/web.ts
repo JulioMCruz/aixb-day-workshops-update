@@ -35,13 +35,14 @@ function paymentPanel(config: AppConfig): string {
         <div class="button-row">
           <button id="job-without-payment" type="button">Probar sin firma</button>
           <button id="job-with-payment" type="button">Probar con firma x402</button>
-          <button id="job-connect-wallet" type="button" class="primary-action">Connect wallet</button>
+          <button id="job-connect-wallet" type="button" class="primary-action" hidden>Connect wallet</button>
           <button id="job-pay-live" type="button" class="primary-action" hidden>Pagar con x402</button>
           <button id="job-switch-network" type="button" hidden>Switch to Base Sepolia</button>
           <button id="job-disconnect" type="button" hidden>Disconnect</button>
         </div>
 
         <p class="hint" id="wallet-info" hidden></p>
+        <p class="hint" id="agent-wallet-info" hidden></p>
         <p class="hint live-hint" id="live-hint" hidden>
           Modo live: el botón "Pay with x402" usa TU wallet (MetaMask, Coinbase Wallet, Rabby, etc.) para firmar el EIP-3009 y liquidar USDC real en Base Sepolia.
         </p>
@@ -636,11 +637,14 @@ function appPage(config: AppConfig): string {
         const jobSwitchNetwork = document.querySelector("#job-switch-network");
         const jobDisconnect = document.querySelector("#job-disconnect");
         const walletInfo = document.querySelector("#wallet-info");
+        const agentWalletInfo = document.querySelector("#agent-wallet-info");
         const erc8004Panel = document.querySelector("#erc8004-panel");
         const erc8004Check = document.querySelector("#erc8004-check");
         const erc8004Register = document.querySelector("#erc8004-register");
         const erc8004Output = document.querySelector("#erc8004-output");
         let activePaymentMode = { live: false, ready: false, label: "fixture" };
+        // Server's seller wallet address (X402_PAY_TO). Updated by /payment-mode.
+        let agentWalletAddress = null;
         // paymentsEnabled mirrors the server's payment-mode switch state.
         // It is true only when the user has flipped "Activar pagos x402" ON
         // AND the server is configured for live x402 (X402_MODE=base-sepolia).
@@ -743,9 +747,24 @@ function appPage(config: AppConfig): string {
           const previousLive = activePaymentMode.live === true;
           activePaymentMode = data.mode || activePaymentMode;
           paymentsEnabled = data.paymentsEnabled === true;
+          agentWalletAddress = data.agentWallet ?? agentWalletAddress;
           paymentToggle.checked = paymentsEnabled;
           jobWithPayment.disabled = activePaymentMode.live === true;
           jobWithPayment.textContent = activePaymentMode.live ? "Pagar desde CLI" : "Probar con firma x402";
+          // Show the server's seller wallet (X402_PAY_TO) so the participant
+          // can see which onchain address receives the USDC. Read from
+          // /payment-mode to avoid exposing the env directly to the client.
+          if (agentWalletInfo) {
+            if (agentWalletAddress && agentWalletAddress.startsWith("0x") && agentWalletAddress.length === 42) {
+              const short = agentWalletAddress.slice(0, 6) + "..." + agentWalletAddress.slice(-4);
+              const baseScanUrl = "https://sepolia.basescan.org/address/" + agentWalletAddress;
+              agentWalletInfo.innerHTML = 'Agent wallet (seller, X402_PAY_TO): <a href="' + baseScanUrl + '" target="_blank" rel="noopener" class="log-link">' + short + '</a>';
+              agentWalletInfo.hidden = false;
+            } else {
+              agentWalletInfo.textContent = "Agent wallet (seller): no X402_PAY_TO configured";
+              agentWalletInfo.hidden = false;
+            }
+          }
           paymentOutput.innerHTML =
             '<div class="status-row">' +
               '<span class="chip">x402: ' + (data.paymentsEnabled ? 'ON' : 'OFF') + '</span>' +
