@@ -994,17 +994,17 @@ function appPage(config: AppConfig): string {
                 erc8004Output.className = "erc8004-output registered";
                 const idText = result.agentId !== null ? "#" + result.agentId : "(agentId no escaneado, ver BaseScan)";
                 erc8004Output.textContent =
-                  "REGISTRADO\n" +
-                  "  address: " + addr + "\n" +
-                  "  agentId: " + idText + "\n" +
-                  "  agentURI: " + (result.agentURI || "(empty)") + "\n" +
+                  "REGISTRADO\\n" +
+                  "  address: " + addr + "\\n" +
+                  "  agentId: " + idText + "\\n" +
+                  "  agentURI: " + (result.agentURI || "(empty)") + "\\n" +
                   "  BaseScan: " + (result.baseScanToken || "");
               } else {
                 erc8004Output.className = "erc8004-output not-registered";
                 erc8004Output.textContent =
-                  "NO REGISTRADO\n" +
-                  "  address: " + addr + "\n" +
-                  "  Hacé click en 'Register on 8004' para registrar tu wallet onchain.\n" +
+                  "NO REGISTRADO\\n" +
+                  "  address: " + addr + "\\n" +
+                  "  Hacé click en 'Register on 8004' para registrar tu wallet onchain.\\n" +
                   "  Vas a firmar una tx que crea un NFT ERC-721 a tu nombre.";
               }
             }
