@@ -6,6 +6,10 @@ AI x Blockchain Day. Está construido con Hono y TypeScript.
 La app está dividida por stages para que una persona pueda entrar en cualquier
 workshop con el trabajo anterior ya implementado.
 
+En la rama `w04-update`, la guía paso a paso del Workshop 4 (pagos x402 en
+vivo en Base Sepolia, browser wallet e identidad ERC-8004 del agente) vive en
+[`workshops/04-agente-que-cobra/STEPS.md`](../workshops/04-agente-que-cobra/STEPS.md).
+
 ## Validar todo el track
 
 ```bash

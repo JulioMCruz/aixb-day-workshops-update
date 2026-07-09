@@ -9,8 +9,8 @@ repository, why we made it, and how to run the workshop from end to end.
 > fixture payment (`x402-fixture-paid` magic string, no real USDC) and has no
 > browser wallet button. Our `w04-update` branch adds:
 >
-> 1. A **cascade LLM reasoning** that tries Nebius → Groq → fixture, so the
->    demo never fails because a key is missing.
+> 1. A **cascade LLM reasoning** that tries Nebius and falls back to a local
+>    fixture, so the demo never fails because a key is missing.
 > 2. A **server-side live payment endpoint** (`POST /x402/pay`) that signs an
 >    EIP-3009 `TransferWithAuthorization` with the workshop's buyer key and
 >    settles a real testnet USDC job in Base Sepolia — no browser needed.
@@ -79,14 +79,21 @@ $EDITOR .env
 
 What is new in `.env.example` compared to Frutero's:
 
-- A documented `GROQ_API_KEY` / `GROQ_MODEL` pair (Plan B LLM).
-- A documented `X402_BUYER_PRIVATE_KEY` (used by `POST /x402/pay`).
-- A documented `X402_PAY_TO` (the wallet that receives USDC). For a
-  self-test you can set both to the same address.
+- A documented `AGENT_PRIVATE_KEY` — the private key of the **agent
+  (seller) wallet**. The server signs the ERC-8004 `register()` tx
+  with it (Step 8) and derives its address automatically.
+- A documented `X402_PAY_TO` — the **agent wallet address**: it
+  receives the USDC of every paid job AND it is the address that gets
+  the ERC-8004 identity NFT. Payments and identity belong to the same
+  wallet. If `AGENT_PRIVATE_KEY` is set, the server derives
+  `X402_PAY_TO` from it, so they always match.
+- A documented `X402_BUYER_PRIVATE_KEY` — the buyer wallet used by
+  `POST /x402/pay` and `npm run x402:pay` (the wallet that PAYS; keep
+  it separate from the agent wallet).
 
-If you only have Nebius, the cascade still works. If you have neither
-Nebius nor Groq, the cascade falls back to a deterministic fixture
-response and the demo still runs.
+For the LLM, only `NEBIUS_API_KEY` matters: with it the reasoning is
+live, without it the cascade falls back to a deterministic fixture
+response and the demo still runs. No other LLM key is needed.
 
 ## Step 4 — Run the workshop (fixture mode)
 
@@ -99,9 +106,10 @@ Open `http://localhost:3001`. The website should look like the end of W3
 at the bottom that contains the four buttons:
 
 - `Probar sin firma`
-- `Probar con firma x402`
-- `Connect wallet` (initially visible)
-- `Pagar con x402` (hidden until the wallet is connected)
+- `Probar con firma x402` (fixture mode)
+- `Pagar desde CLI` (live mode)
+- `Connect wallet` / `Pay with x402` (live mode; they appear when the
+  x402 switch is ON)
 
 Click `Probar sin firma` with the **Activar pagos x402** switch OFF, and
 you should see an HTTP 201 with a hardcoded demo string. That is the
@@ -120,7 +128,9 @@ settlement.
 ```bash
 npm run wallet:create
 # → writes .aixb-wallet.fixture.json with { privateKey, address }
-```The script uses viem's `privateKeyToAccount`, which derives the EVM
+```
+
+The script uses viem's `privateKeyToAccount`, which derives the EVM
 address from `keccak256(publicKey)` — the same algorithm every EVM
 wallet uses. (Frutero's original script used `sha256(privateKey).slice(-40)`
 which produces a wrong address. We fixed that.)
@@ -150,10 +160,15 @@ In `.env`, set:
 
 ```
 X402_MODE=base-sepolia
-X402_PAY_TO=0xYOUR_SELLER_WALLET
-AGENT_PRIVATE_KEY=0xYOUR_SELLER_PRIVATE_KEY   # optional: derived address overrides X402_PAY_TO
-X402_BUYER_PRIVATE_KEY=0xYOUR_BUYER_PRIVATE_KEY
+AGENT_PRIVATE_KEY=0xAGENT_WALLET_PRIVATE_KEY   # agent (seller) wallet: signs the ERC-8004 register() tx
+X402_PAY_TO=0xAGENT_WALLET_ADDRESS             # that wallet's address: receives USDC and holds the ERC-8004 identity
+X402_BUYER_PRIVATE_KEY=0xBUYER_PRIVATE_KEY     # buyer wallet: pays the jobs (keep it separate from the agent)
 ```
+
+`X402_PAY_TO` must be the address of the agent that will get the
+ERC-8004 identity in Step 8: payments and identity belong to the same
+wallet. If `AGENT_PRIVATE_KEY` is set, the server derives the address
+from it automatically, so `X402_PAY_TO` can be omitted.
 
 Restart:
 
@@ -217,7 +232,8 @@ Each participant signs with their own key, so the workshop can run with
 - A small amount of Base Sepolia ETH for gas
 - A small amount of Base Sepolia USDC for the job price
 
-The facilitator wallet (`X402_PAY_TO`) receives USDC for every paid job.
+The agent wallet (`X402_PAY_TO`) receives USDC for every paid job — the
+same wallet that holds the ERC-8004 identity from Step 8.
 
 #### Sequence diagram — x402 real pay flow on Base Sepolia
 
@@ -228,7 +244,7 @@ sequenceDiagram
     autonumber
     actor U as Participant<br/>(MetaMask)
     participant B as Browser<br/>(x402-client.js)
-    participant S as Server<br/>(:3012 /jobs)
+    participant S as Server<br/>(:3001 /jobs)
     participant F as Facilitator<br/>(Coinbase CDP)
     participant USDC as USDC Contract<br/>0x036CbD538...
     participant BS as BaseScan
@@ -353,8 +369,8 @@ Example response for an unregistered wallet:
 You can also call this from the command line:
 
 ```bash
-curl -sS http://localhost:3012/agents/0xYOUR_ADDRESS | jq .
-curl -sS http://localhost:3012/agents/registry-info | jq .
+curl -sS http://localhost:3001/agents/0xYOUR_ADDRESS | jq .
+curl -sS http://localhost:3001/agents/registry-info | jq .
 ```
 
 ### 8.2 — Register the seller agent onchain
@@ -375,14 +391,19 @@ curl -sS http://localhost:3012/agents/registry-info | jq .
    button is idempotent: a second click returns the same `agentId`
    without sending a new tx.
 
-The activity log will show 3 events for this step:
+The server returns its step log in the response and the UI replays it
+in the activity panel, so the participant can follow the whole flow:
 
-- `[1/3] Enviando POST /agents/register-server...`
-- `[2/3] Tx settled: 0x...` (with a clickable BaseScan link)
-- `[3/3] Seller agent registrado: owner=0x6ae164B7... agentId=#7902`
-- `Call data encodeado (N bytes)` — encoded register call data
-- `Tx enviada: 0xabc...` — with a clickable `ver tx ↗` link to BaseScan
-- `¡Agent registrado! agentId = N` — with a clickable `ver NFT ↗` link
+- `Wallet del agente (seller): 0x... El server firma con AGENT_PRIVATE_KEY, tu MetaMask no participa.`
+- `Paso 1/4: consultando el IdentityRegistry en Base Sepolia. ¿Esta wallet ya tiene identidad de agente?`
+- `Paso 2/4: agentURI listo, un JSON con nombre, endpoints y soporte x402 del agente, embebido como data: URI`
+- `Paso 3/4: enviando la tx register(agentURI) al IdentityRegistry...` (clickable BaseScan tx link)
+- `Confirmada en el bloque N. Costo real: 799556 gas, 0.0008 ETH de testnet.`
+- `Paso 4/4: agentId asignado: #N. El agente ya tiene su NFT de identidad ERC-8004...` (clickable NFT link)
+
+On a second click, step 1 short-circuits: `Ya estaba registrada como
+agentId #N. El registro es idempotente: no se envía otra tx y no se
+gasta gas.`
 
 > **End-to-end verified (2026-07-09 10:36 UTC):** the facilitator's
 > `X402_BUYER_PRIVATE_KEY` wallet (`0x4a8FFDA35Fd4463E881a0E69215B547FE8EFCEd4`)
@@ -452,24 +473,22 @@ The whole flow is ~200 lines of code across 4 files:
   `balanceOf(address)` on the registry, then walks back the `Registered`
   event log in 2000-block chunks to recover `agentId`.
   `buildSelfRegistrationURI()` builds the registration JSON inline
-  (no IPFS). `encodeRegisterCallData()` returns the hex call data for
-  the browser wallet.
-- `server/src/routes/jobs.ts` — 2 new endpoints:
+  (no IPFS). `serverRegisterAgent()` signs and sends the `register()`
+  tx with `AGENT_PRIVATE_KEY` and narrates each step for the UI log.
+- `server/src/routes/jobs.ts` — 3 new endpoints:
   - `GET /agents/registry-info` — static helper with the contract
     address, chainId, and BaseScan URL.
   - `GET /agents/:address` — onchain lookup; pre-builds
     `selfRegistrationURI` when the wallet is not yet registered.
-- `server/src/web/x402-client.ts` — 2 new browser methods:
+  - `POST /agents/register-server` — runs `serverRegisterAgent()` and
+    returns `{agentId, txHash, owner}` plus the step-by-step log.
+    Idempotent: safe to call twice.
+- `server/src/web/x402-client.ts` — 1 new browser method:
   - `lookupAgent8004(address)` — fetches `/agents/:address`.
-  - `registerAgent8004()` — asks the server for the `agentURI`,
-    encodes the call data locally with `viem.encodeFunctionData()`,
-    and submits via `window.ethereum.request({ method:
-    'eth_sendTransaction', ... })`. Then polls the server for up to
-    60s to surface the new `agentId`.
-- `server/src/routes/web.ts` — 2 new buttons in a new
-  `#erc8004-panel` section of the wallet panel. Visible only when the
-  wallet is connected AND the x402 payment gate is ON. The Register
-  button is hidden when the wallet is already registered.
+- `server/src/routes/web.ts` — the `#erc8004-panel` section with the
+  `Check 8004 registration` and `Register seller agent (server-side)`
+  buttons. Both operate on the agent wallet (seller), not on the
+  connected MetaMask.
 
 ### 8.4 — When to use this in your own projects
 
@@ -516,8 +535,9 @@ directory. See `git diff main..w04-update -- server` for the full diff.
 
 ### Modified files
 
-- `server/src/integrations/nebius.ts` — replaced `callNebius()` with
-  `callLLM()` cascade that tries Nebius → Groq → fixture in order.
+- `server/src/integrations/nebius.ts` — replaced `callNebius()` with a
+  `callLLM()` cascade that tries the configured provider (Nebius) and
+  falls back to a local fixture, so the demo never blocks on an LLM key.
 - `server/scripts/create-wallet.ts` — fixed the EVM address derivation
   bug (`sha256(privateKey).slice(-40)` → `keccak256(publicKey)` via
   viem's `privateKeyToAccount`).
@@ -527,12 +547,12 @@ directory. See `git diff main..w04-update -- server` for the full diff.
   panel with color-coded entries, and the wallet-info paragraph.
 - `server/src/types.ts` — added the `paymentsEnabled` / `mode` typing
   for the payment-mode endpoint.
-- `server/.env.example` — documented `GROQ_API_KEY` / `GROQ_MODEL`
-  (Plan B) and `X402_BUYER_PRIVATE_KEY` / `X402_PAY_TO`.
+- `server/.env.example` — documented `AGENT_PRIVATE_KEY`,
+  `X402_PAY_TO` (the agent wallet) and `X402_BUYER_PRIVATE_KEY`.
 - `server/.gitignore` — added `.aixb-wallet.fixture.json` and
   `.env.backup-*` patterns.
 - `server/package.json` — added `npm run build:web` script.
-- `server/README.md` — added a section pointing to this `PASOS.md` and
+- `server/README.md` — added a section pointing to this `STEPS.md` and
   summarising the live settlement flow.
 
 ### What we deliberately did NOT change
@@ -544,7 +564,7 @@ directory. See `git diff main..w04-update -- server` for the full diff.
   the `erc8004Feedback` in paid job responses are unchanged.
 - `server/src/integrations/github.ts`, `brain.ts`, `agent.ts`,
   `mentor.ts`, `mentor-agent.ts` — untouched.
-- The whole `workshops/` directory except for this `PASOS.md` file.
+- The whole `workshops/` directory except for this `STEPS.md` file.
 - The whole `README.md` at the root of the repo.
 
 ## Why this approach
@@ -588,5 +608,5 @@ web UI).
 - ERC-8004: <https://eips.ethereum.org/EIPS/eip-8004>
 - Circle USDC Faucet: <https://faucet.circle.com/>
 - Coinbase Base Sepolia Faucet: <https://www.coinbase.com/faucets/base-ethereum-sepolia-faucet>
-- Alchemy Base Sepolia Faucet: <https://www.alchemy.com/factions/base-sepolia>
+- Alchemy Base Sepolia Faucet: <https://www.alchemy.com/faucets/base-sepolia>
 - Base Sepolia Explorer: <https://sepolia.basescan.org/>
