@@ -637,7 +637,9 @@ function appPage(config: AppConfig): string {
           const live = activePaymentMode.live === true;
 
           if (jobConnectWallet) {
-            jobConnectWallet.hidden = isConnected;
+            // Connect wallet is only relevant when the x402 payment gate is on.
+            // Without live mode there is no "Pay with x402" button to unlock.
+            jobConnectWallet.hidden = isConnected || !live;
             jobConnectWallet.disabled = false;
           }
           if (jobPayLive) {
@@ -649,7 +651,8 @@ function appPage(config: AppConfig): string {
             jobSwitchNetwork.hidden = !isConnected || isBaseSepolia;
           }
           if (jobDisconnect) {
-            jobDisconnect.hidden = !isConnected;
+            // Disconnect follows the same gate as Connect.
+            jobDisconnect.hidden = !isConnected || !live;
           }
           if (walletInfo) {
             if (isConnected) {
