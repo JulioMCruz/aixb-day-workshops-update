@@ -694,9 +694,13 @@ function appPage(config: AppConfig): string {
         }
 
         function refreshWalletControls() {
-          if (!window.aixbWallet) return;
-          const isConnected = window.aixbWallet.isConnected();
-          const chainId = window.aixbWallet.getChainId();
+          // We do NOT early-return when window.aixbWallet is missing.
+          // The 'Connect wallet' button must remain visible when the gate
+          // is on, even if the bundle is still loading or unavailable.
+          // The other buttons (Pay, Switch, Disconnect) check
+          // isConnected() and will hide themselves accordingly.
+          const isConnected = window.aixbWallet ? window.aixbWallet.isConnected() : false;
+          const chainId = window.aixbWallet ? window.aixbWallet.getChainId() : null;
           const isBaseSepolia = chainId === 84532;
           // The wallet UI is gated by the user's switch, not the server's
           // X402_MODE. paymentsEnabled is true only when the user has flipped
@@ -723,7 +727,7 @@ function appPage(config: AppConfig): string {
             jobDisconnect.hidden = !isConnected || !gateOn;
           }
           if (walletInfo) {
-            if (isConnected) {
+            if (isConnected && window.aixbWallet) {
               const addr = window.aixbWallet.getAddress();
               const short = addr ? (addr.slice(0, 6) + "..." + addr.slice(-4)) : "";
               walletInfo.hidden = false;
