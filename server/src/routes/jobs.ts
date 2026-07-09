@@ -4,7 +4,7 @@ import type { Network } from "@x402/core/types";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { paymentMiddleware } from "@x402/hono";
 import type { Context, MiddlewareHandler } from "hono";
-import { createAgentRegistration, createFeedback } from "../integrations/erc8004.js";
+import { createAgentRegistration, createFeedback, lookupAgent, buildSelfRegistrationURI, ERC8004_IDENTITY_REGISTRY_BASESEPOLIA } from "../integrations/erc8004.js";
 import { readWallet } from "../integrations/wallet.js";
 import {
   createPaymentRequired,
@@ -155,6 +155,55 @@ export function registerJobRoutes(app: App, config: AppConfig): void {
     if (unavailable) return unavailable;
 
     return c.json(createAgentRegistration(config));
+  });
+
+  // Static helper for the workshop demo. Returns the IdentityRegistry address
+  // and the suggested self-registration URI for the *workshop's own agent*
+  // so the UI can show the address without an extra round trip.
+  // NOTE: this route must be registered BEFORE the parameterized :address
+  // route, otherwise Hono matches "registry-info" as the address param.
+  app.get("/agents/registry-info", (c) => {
+    const unavailable = requireStage(c, config, 4);
+    if (unavailable) return unavailable;
+
+    return c.json({
+      ok: true,
+      registry: ERC8004_IDENTITY_REGISTRY_BASESEPOLIA,
+      chainId: 84532,
+      network: "base-sepolia",
+      baseScanContract: `https://sepolia.basescan.org/address/${ERC8004_IDENTITY_REGISTRY_BASESEPOLIA}`
+    });
+  });
+
+  // ERC-8004 onchain lookup. Reads the IdentityRegistry on Base Sepolia.
+  // Used by the workshop UI to verify whether a wallet has self-registered
+  // an agent identity. See erc8004.ts for the contract address.
+  app.get("/agents/:address", async (c) => {
+    const unavailable = requireStage(c, config, 4);
+    if (unavailable) return unavailable;
+
+    const raw = c.req.param("address");
+    const result = await lookupAgent(config, raw);
+    if (!result.ok) {
+      return c.json({ ok: false, error: result.error }, 400);
+    }
+    return c.json({
+      ok: true,
+      network: result.network,
+      chainId: result.chainId,
+      registry: result.registry,
+      address: result.address,
+      registered: result.registered,
+      agentId: result.agentId,
+      agentURI: result.agentURI,
+      baseScanToken: result.baseScanToken,
+      registrationTxHash: result.registrationTxHash,
+      // Pre-built data: URL with the agentURI the student can register with.
+      // null when the student is already registered.
+      selfRegistrationURI: result.registered
+        ? null
+        : buildSelfRegistrationURI(config, result.address)
+    });
   });
 
   app.get("/payment-mode", (c) => {

@@ -220,6 +220,158 @@ Each participant signs with their own key, so the workshop can run with
 
 The facilitator wallet (`X402_PAY_TO`) receives USDC for every paid job.
 
+## Step 8 — W4 BONUS: register your agent on ERC-8004 (onchain identity)
+
+ERC-8004 is the onchain agent identity standard. The
+`IdentityRegistry` on Base Sepolia is an ERC-721 NFT contract:
+calling `register(string agentURI)` mints an NFT to your wallet and
+stores the `agentURI` (a self-describing JSON document about your agent).
+This is what other agents will use to look you up and verify what you
+can do.
+
+> Identity is the layer that lets a buyer know *who* they paid. The
+> x402 payment proves *that* a payment happened; the ERC-8004
+> registration proves *which* agent they paid. They are complementary
+> rails, not competitors.
+
+The workshop UI exposes a 2-button flow on top of the wallet panel:
+
+- **Check 8004 registration** — calls `GET /agents/<address>` and
+  reads the `IdentityRegistry` onchain. If your wallet already owns
+  an agent NFT, you'll see `agentId` and a clickable BaseScan link.
+- **Register on 8004** — builds a `data:application/json;base64,...`
+  `agentURI` that points to your agent's metadata (name, description,
+  services, image, x402 support), encodes the call data for
+  `register(string)`, and asks your wallet to send the transaction.
+  You sign in MetaMask / Coinbase Wallet / Rabby and pay gas from
+  your own ETH balance.
+
+### 8.1 — What the server builds for you
+
+The endpoint `GET /agents/<address>` returns either:
+
+- `registered: true` with `agentId` (when the agent NFT exists and was
+  minted within the last ~2 days; older agents show as registered but
+  `agentId` may be null — see the BaseScan link to recover it), or
+- `registered: false` with a pre-built `selfRegistrationURI` — a
+  base64-encoded JSON document following the `eip-8004#registration-v1`
+  schema that you can register as-is.
+
+The `selfRegistrationURI` is generated server-side because the
+registration JSON has to include your wallet's address (the agent's
+owner) and the workshop server's endpoints (web, API, x402). You don't
+need IPFS or any external hosting: the URI is inline.
+
+Example response for an unregistered wallet:
+
+```json
+{
+  "ok": true,
+  "registered": false,
+  "address": "0x499D377eF114cC1BF7798cECBB38412701400daF",
+  "agentId": null,
+  "baseScanToken": "https://sepolia.basescan.org/token/0x8004A818BFB912233c491871b3d84c89A494BD9e?a=0x499D377eF114cC1BF7798cECBB38412701400daF",
+  "selfRegistrationURI": "data:application/json;base64,eyJ0eXBlI..."
+}
+```
+
+You can also call this from the command line:
+
+```bash
+curl -sS http://localhost:3012/agents/0xYOUR_ADDRESS | jq .
+curl -sS http://localhost:3012/agents/registry-info | jq .
+```
+
+### 8.2 — Register your wallet onchain
+
+1. Open the workshop UI at <http://localhost:3012/>.
+2. Make sure the **Activar pagos x402** switch is ON and your wallet is
+   connected on Base Sepolia.
+3. Scroll down to the **ERC-8004 identity** section.
+4. Click **Check 8004 registration**.
+5. If you see `NOT REGISTERED`, click **Register on 8004**.
+6. Your wallet (MetaMask / Coinbase Wallet / Rabby) will pop up asking
+   you to confirm a transaction to
+   `0x8004A818BFB912233c491871b3d84c89A494BD9e` (the
+   `IdentityRegistry`). The call data encodes `register(string)` with
+   the `agentURI` from step 8.1.
+7. Confirm the transaction. It costs a small amount of Base Sepolia
+   ETH for gas.
+8. Wait ~10 seconds. The UI polls `GET /agents/<address>` every 2s for
+   up to 60s. When the agent NFT is visible, you'll see `agentId` and
+   a clickable BaseScan link to the token.
+9. Re-run **Check 8004 registration** any time to confirm.
+
+The activity log will show 3 events:
+
+- `ERC-8004 feedback: value=100 tag1=x402PaidJob ...` (from the x402
+  paid job — Step 7 left this in your log)
+- `Wallet conectada: 0x1234...`
+- `Call data encodeado (N bytes)` — encoded register call data
+- `Tx enviada: 0xabc...` — with a clickable `ver tx ↗` link to BaseScan
+- `¡Agent registrado! agentId = N` — with a clickable `ver NFT ↗` link
+
+> **End-to-end verified (2026-07-09 10:36 UTC):** the facilitator's
+> `X402_BUYER_PRIVATE_KEY` wallet (`0x4a8FFDA35Fd4463E881a0E69215B547FE8EFCEd4`)
+> successfully registered on the Base Sepolia `IdentityRegistry`. The
+> resulting `agentId` is `7893`, the tx hash is
+> `0xe476dafc9b7c7ec009891b8be8370aac501c6eef21137853308554da423ea3ab`,
+> and the lookup endpoint recovered it in 0.45s. Gas used: 799556.
+> See the live token at
+> <https://sepolia.basescan.org/token/0x8004A818BFB912233c491871b3d84c89A494BD9e?a=0x4a8FFDA35Fd4463E881a0E69215B547FE8EFCEd4>.
+
+### 8.3 — Code: how it works
+
+The whole flow is ~200 lines of code across 4 files:
+
+- `server/src/integrations/erc8004.ts` — `lookupAgent()` reads
+  `balanceOf(address)` on the registry, then walks back the `Registered`
+  event log in 2000-block chunks to recover `agentId`.
+  `buildSelfRegistrationURI()` builds the registration JSON inline
+  (no IPFS). `encodeRegisterCallData()` returns the hex call data for
+  the browser wallet.
+- `server/src/routes/jobs.ts` — 2 new endpoints:
+  - `GET /agents/registry-info` — static helper with the contract
+    address, chainId, and BaseScan URL.
+  - `GET /agents/:address` — onchain lookup; pre-builds
+    `selfRegistrationURI` when the wallet is not yet registered.
+- `server/src/web/x402-client.ts` — 2 new browser methods:
+  - `lookupAgent8004(address)` — fetches `/agents/:address`.
+  - `registerAgent8004()` — asks the server for the `agentURI`,
+    encodes the call data locally with `viem.encodeFunctionData()`,
+    and submits via `window.ethereum.request({ method:
+    'eth_sendTransaction', ... })`. Then polls the server for up to
+    60s to surface the new `agentId`.
+- `server/src/routes/web.ts` — 2 new buttons in a new
+  `#erc8004-panel` section of the wallet panel. Visible only when the
+  wallet is connected AND the x402 payment gate is ON. The Register
+  button is hidden when the wallet is already registered.
+
+### 8.4 — When to use this in your own projects
+
+The pattern is:
+
+- **Look up the agent** before you call a paid service. If the
+  provider is registered, you have an `agentId` to put in your
+  payment receipt / audit log.
+- **Register your own agent** the first time you call any x402
+  service. The registration is permanent and one-time per wallet.
+- **Use the same `agentURI` shape** as the workshop server
+  (`eip-8004#registration-v1` with `services[]` and `x402Support:
+  true`). The `agentRegistry` field in `registrations[]` should be
+  `eip155:84532:0x8004A818BFB912233c491871b3d84c89A494BD9e` on Base
+  Sepolia (use the equivalent for your target chain).
+- **Don't rely on `tokenOfOwnerByIndex`** — the Base Sepolia
+  `IdentityRegistry` does not implement it. Always use the
+  `Registered` event log to recover `agentId` from an owner address.
+
+The ERC-8004 contract addresses on testnet (verified July 2026):
+
+| Network | Chain ID | IdentityRegistry |
+| --- | --- | --- |
+| Base Sepolia | 84532 | `0x8004A818BFB912233c491871b3d84c89A494BD9e` |
+| Ethereum Sepolia | 11155111 | (see agent0lab/subgraph config) |
+
 ## Summary of code changes
 
 All the changes below live in the `w04-update` branch, in the `server/`

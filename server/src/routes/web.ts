@@ -46,6 +46,18 @@ function paymentPanel(config: AppConfig): string {
           Modo live: el botón "Pay with x402" usa TU wallet (MetaMask, Coinbase Wallet, Rabby, etc.) para firmar el EIP-3009 y liquidar USDC real en Base Sepolia.
         </p>
 
+        <section class="erc8004-panel" id="erc8004-panel" hidden>
+          <h3>ERC-8004 identity</h3>
+          <p class="hint">
+            Registrá tu wallet como agente onchain en el <code>IdentityRegistry</code> de Base Sepolia. El registro es un NFT ERC-721 con un <code>agentURI</code> que apunta a la metadata de tu agente.
+          </p>
+          <div class="button-row">
+            <button id="erc8004-check" type="button">Check 8004 registration</button>
+            <button id="erc8004-register" type="button" class="primary-action" hidden>Register on 8004</button>
+          </div>
+          <pre class="erc8004-output" id="erc8004-output" hidden></pre>
+        </section>
+
         <section class="activity-log" id="activity-log" aria-live="polite">
           <p class="empty">El log de actividad aparecerá aquí. Cada click registra un evento.</p>
         </section>
@@ -451,6 +463,46 @@ function appPage(config: AppConfig): string {
         font-size: 13px;
       }
 
+      .erc8004-panel {
+        margin-top: 18px;
+        padding: 14px 16px;
+        background: rgba(0, 212, 255, 0.04);
+        border: 1px solid rgba(0, 212, 255, 0.2);
+        border-radius: 6px;
+      }
+      .erc8004-panel h3 {
+        margin: 0 0 8px 0;
+        font-size: 14px;
+        color: var(--cyan);
+        font-weight: 600;
+      }
+      .erc8004-panel .hint {
+        font-size: 12px;
+        margin: 0 0 10px 0;
+        line-height: 1.5;
+      }
+      .erc8004-panel .hint code {
+        background: rgba(255, 255, 255, 0.06);
+        padding: 1px 4px;
+        border-radius: 3px;
+        font-size: 11px;
+      }
+      .erc8004-output {
+        margin-top: 10px;
+        padding: 10px 12px;
+        background: rgba(0, 0, 0, 0.25);
+        border-radius: 4px;
+        font-size: 12px;
+        line-height: 1.5;
+        max-height: 200px;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+      .erc8004-output.registered { border-left: 3px solid #6cf09a; }
+      .erc8004-output.not-registered { border-left: 3px solid var(--warn); }
+      .erc8004-output.error { border-left: 3px solid #ff6b6b; }
+
       .payment-output {
         border-top: 1px solid var(--line);
         margin-top: 18px;
@@ -584,6 +636,10 @@ function appPage(config: AppConfig): string {
         const jobSwitchNetwork = document.querySelector("#job-switch-network");
         const jobDisconnect = document.querySelector("#job-disconnect");
         const walletInfo = document.querySelector("#wallet-info");
+        const erc8004Panel = document.querySelector("#erc8004-panel");
+        const erc8004Check = document.querySelector("#erc8004-check");
+        const erc8004Register = document.querySelector("#erc8004-register");
+        const erc8004Output = document.querySelector("#erc8004-output");
         let activePaymentMode = { live: false, ready: false, label: "fixture" };
         // paymentsEnabled mirrors the server's payment-mode switch state.
         // It is true only when the user has flipped "Activar pagos x402" ON
@@ -673,6 +729,13 @@ function appPage(config: AppConfig): string {
             } else {
               walletInfo.hidden = true;
             }
+          }
+          // ERC-8004 identity panel. We only show it when the wallet is
+          // connected AND the x402 gate is on (same gate as Pay with x402).
+          // Hiding it on disconnect prevents the panel from showing stale
+          // data from a previous wallet.
+          if (erc8004Panel) {
+            erc8004Panel.hidden = !isConnected || !gateOn;
           }
         }
 
@@ -860,6 +923,79 @@ function appPage(config: AppConfig): string {
           refreshWalletControls();
         }
 
+        async function checkErc8004Handler() {
+          if (!window.aixbWallet) {
+            logEvent("error", "Wallet client no cargado. Refrescá la página.");
+            return;
+          }
+          const addr = window.aixbWallet.getAddress();
+          if (!addr) {
+            logEvent("error", "Primero conectá tu wallet.");
+            return;
+          }
+          if (erc8004Check) erc8004Check.disabled = true;
+          try {
+            const result = await window.aixbWallet.lookupAgent8004(addr);
+            if (!result.ok) {
+              if (erc8004Output) {
+                erc8004Output.hidden = false;
+                erc8004Output.className = "erc8004-output error";
+                erc8004Output.textContent = "Error: " + (result.error || "unknown");
+              }
+              return;
+            }
+            if (erc8004Output) {
+              erc8004Output.hidden = false;
+              if (result.registered) {
+                erc8004Output.className = "erc8004-output registered";
+                const idText = result.agentId !== null ? "#" + result.agentId : "(agentId no escaneado, ver BaseScan)";
+                erc8004Output.textContent =
+                  "REGISTRADO\n" +
+                  "  address: " + addr + "\n" +
+                  "  agentId: " + idText + "\n" +
+                  "  agentURI: " + (result.agentURI || "(empty)") + "\n" +
+                  "  BaseScan: " + (result.baseScanToken || "");
+              } else {
+                erc8004Output.className = "erc8004-output not-registered";
+                erc8004Output.textContent =
+                  "NO REGISTRADO\n" +
+                  "  address: " + addr + "\n" +
+                  "  Hacé click en 'Register on 8004' para registrar tu wallet onchain.\n" +
+                  "  Vas a firmar una tx que crea un NFT ERC-721 a tu nombre.";
+              }
+            }
+            // Show the Register button only when not registered.
+            if (erc8004Register) {
+              erc8004Register.hidden = result.registered;
+            }
+          } finally {
+            if (erc8004Check) erc8004Check.disabled = false;
+          }
+        }
+
+        async function registerErc8004Handler() {
+          if (!window.aixbWallet) {
+            logEvent("error", "Wallet client no cargado. Refrescá la página.");
+            return;
+          }
+          if (erc8004Register) erc8004Register.disabled = true;
+          try {
+            const result = await window.aixbWallet.registerAgent8004();
+            if (!result.ok) {
+              if (erc8004Output) {
+                erc8004Output.hidden = false;
+                erc8004Output.className = "erc8004-output error";
+                erc8004Output.textContent = "Register failed: " + (result.error || "unknown");
+              }
+              return;
+            }
+            // Refresh the panel with the new state.
+            await checkErc8004Handler();
+          } finally {
+            if (erc8004Register) erc8004Register.disabled = false;
+          }
+        }
+
         paymentToggle.addEventListener("change", () => {
           setPaymentMode(paymentToggle.checked).catch((error) => {
             logEvent("error", "Error en switch: " + (error.message || error));
@@ -908,6 +1044,22 @@ function appPage(config: AppConfig): string {
         if (jobDisconnect) {
           jobDisconnect.addEventListener("click", () => {
             disconnectWalletHandler();
+          });
+        }
+
+        if (erc8004Check) {
+          erc8004Check.addEventListener("click", () => {
+            checkErc8004Handler().catch((error) => {
+              logEvent("error", "Check 8004 error: " + (error.message || error));
+            });
+          });
+        }
+
+        if (erc8004Register) {
+          erc8004Register.addEventListener("click", () => {
+            registerErc8004Handler().catch((error) => {
+              logEvent("error", "Register 8004 error: " + (error.message || error));
+            });
           });
         }
 

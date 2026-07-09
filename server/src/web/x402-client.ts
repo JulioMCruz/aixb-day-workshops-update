@@ -34,6 +34,22 @@ declare global {
         body: unknown;
         error?: string;
       }>;
+      lookupAgent8004: (address: Address) => Promise<{
+        ok: boolean;
+        registered: boolean;
+        agentId: number | null;
+        agentURI: string | null;
+        baseScanToken: string | null;
+        selfRegistrationURI: string | null;
+        error?: string;
+      }>;
+      registerAgent8004: () => Promise<{
+        ok: boolean;
+        txHash: string | null;
+        agentId: number | null;
+        baseScanToken: string | null;
+        error?: string;
+      }>;
       onAccountChanged: (cb: (address: Address | null) => void) => void;
       onChainChanged: (cb: (chainId: number) => void) => void;
     };
@@ -287,6 +303,205 @@ async function payWithX402(task: string, input: string): Promise<{
   };
 }
 
+// ERC-8004 IdentityRegistry on Base Sepolia.
+// Same address as in src/integrations/erc8004.ts (agent0lab subgraph config).
+// The browser uses this constant to build a `eth_sendTransaction` payload
+// without round-tripping to the server for the registry address.
+const ERC8004_IDENTITY_REGISTRY_BASESEPOLIA =
+  "0x8004A818BFB912233c491871b3d84c89A494BD9e" as const;
+
+// Minimal ABI for `register(string)` -> uint256 agentId.
+const ERC8004_REGISTER_ABI = [
+  {
+    name: "register",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "agentURI", type: "string" }],
+    outputs: [{ name: "agentId", type: "uint256" }]
+  }
+] as const;
+
+type Erc8004Lookup = {
+  ok: boolean;
+  registered: boolean;
+  agentId: number | null;
+  agentURI: string | null;
+  baseScanToken: string | null;
+  selfRegistrationURI: string | null;
+  error?: string;
+};
+
+type Erc8004Register = {
+  ok: boolean;
+  txHash: string | null;
+  agentId: number | null;
+  baseScanToken: string | null;
+  error?: string;
+};
+
+async function lookupAgent8004(address: Address): Promise<Erc8004Lookup> {
+  log("info", `Consultando ERC-8004 IdentityRegistry para ${address.slice(0, 10)}...`);
+  try {
+    const res = await fetch(`/agents/${address}`);
+    if (!res.ok) {
+      const errBody = (await res.json().catch(() => null)) as { error?: string } | null;
+      const errMsg = errBody?.error ?? `HTTP ${res.status}`;
+      log("error", `Lookup 8004 falló: ${errMsg}`);
+      return {
+        ok: false,
+        registered: false,
+        agentId: null,
+        agentURI: null,
+        baseScanToken: null,
+        selfRegistrationURI: null,
+        error: errMsg
+      };
+    }
+    const data = (await res.json()) as {
+      ok: boolean;
+      registered: boolean;
+      agentId: number | null;
+      agentURI: string | null;
+      baseScanToken: string;
+      selfRegistrationURI: string | null;
+    };
+
+    if (data.registered) {
+      const idText = data.agentId !== null ? `#${data.agentId}` : "(agentId no escaneado, ver BaseScan)";
+      log("ok", `Agent ERC-8004 registrado: ${idText}`);
+      const baseScanUrl = data.baseScanToken;
+      log("ok", `Token on BaseScan`, { url: baseScanUrl, text: "ver NFT ↗" });
+    } else {
+      log("info", "Wallet sin registro ERC-8004. Hay que registrarse onchain.");
+    }
+
+    return {
+      ok: true,
+      registered: data.registered,
+      agentId: data.agentId,
+      agentURI: data.agentURI,
+      baseScanToken: data.baseScanToken,
+      selfRegistrationURI: data.selfRegistrationURI
+    };
+  } catch (e) {
+    const errMsg = e instanceof Error ? e.message : String(e);
+    log("error", `Lookup 8004 error: ${errMsg}`);
+    return {
+      ok: false,
+      registered: false,
+      agentId: null,
+      agentURI: null,
+      baseScanToken: null,
+      selfRegistrationURI: null,
+      error: errMsg
+    };
+  }
+}
+
+async function registerAgent8004(): Promise<Erc8004Register> {
+  if (!currentAddress) {
+    const err = "Wallet no conectada. Hacé click en 'Connect wallet' primero.";
+    log("error", err);
+    return { ok: false, txHash: null, agentId: null, baseScanToken: null, error: err };
+  }
+  if (currentChainId !== BASE_SEPOLIA_CHAIN_ID) {
+    const err = `Red incorrecta (${currentChainId}). Cambiá a Base Sepolia primero.`;
+    log("error", err);
+    return { ok: false, txHash: null, agentId: null, baseScanToken: null, error: err };
+  }
+  if (!window.ethereum) {
+    const err = "No se detectó wallet EIP-1193.";
+    log("error", err);
+    return { ok: false, txHash: null, agentId: null, baseScanToken: null, error: err };
+  }
+
+  // Step 1: ask the server for the agentURI we'd register with.
+  log("info", "Pidiendo agentURI al servidor...");
+  const lookup = await lookupAgent8004(currentAddress);
+  if (!lookup.ok) {
+    return { ok: false, txHash: null, agentId: null, baseScanToken: null, error: lookup.error };
+  }
+  if (lookup.registered) {
+    log("info", "Tu wallet ya está registrada. No hace falta volver a hacerlo.");
+    return {
+      ok: true,
+      txHash: null,
+      agentId: lookup.agentId,
+      baseScanToken: lookup.baseScanToken,
+      error: "already registered"
+    };
+  }
+  const agentURI = lookup.selfRegistrationURI;
+  if (!agentURI) {
+    const err = "El servidor no devolvió un selfRegistrationURI.";
+    log("error", err);
+    return { ok: false, txHash: null, agentId: null, baseScanToken: null, error: err };
+  }
+  log("info", `agentURI listo (length=${agentURI.length} chars)`);
+
+  // Step 2: encode `register(string)` with viem so we can pass the call
+  // data straight to eth_sendTransaction. Encoding locally avoids
+  // shipping the full ABI to the browser for one function call.
+  const { encodeFunctionData } = await import("viem");
+  const callData = encodeFunctionData({
+    abi: ERC8004_REGISTER_ABI,
+    functionName: "register",
+    args: [agentURI]
+  });
+  log("ok", `Call data encodeado (${callData.length / 2 - 1} bytes)`);
+
+  // Step 3: send the transaction. The wallet will pop up for confirmation
+  // and pay the gas from the user's own ETH balance.
+  log("info", "Enviando tx al wallet (vas a ver el popup de MetaMask)...");
+  const txHash = (await window.ethereum.request({
+    method: "eth_sendTransaction",
+    params: [
+      {
+        from: currentAddress,
+        to: ERC8004_IDENTITY_REGISTRY_BASESEPOLIA,
+        data: callData,
+        value: "0x0",
+        chainId: BASE_SEPOLIA_HEX
+      }
+    ]
+  })) as `0x${string}`;
+
+  const baseScanTx = `https://sepolia.basescan.org/tx/${txHash}`;
+  log("ok", `Tx enviada: ${txHash.slice(0, 20)}...`, { url: baseScanTx, text: "ver tx ↗" });
+
+  // Step 4: poll the server until the agentId is visible (max 60s).
+  log("info", "Esperando confirmación onchain (poll cada 2s)...");
+  let agentId: number | null = null;
+  for (let i = 0; i < 30 && agentId === null; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const after = await lookupAgent8004(currentAddress);
+    if (after.ok && after.registered && after.agentId !== null) {
+      agentId = after.agentId;
+    }
+  }
+
+  if (agentId !== null) {
+    const tokenUrl = `https://sepolia.basescan.org/token/${ERC8004_IDENTITY_REGISTRY_BASESEPOLIA}?a=${agentId}`;
+    log("ok", `¡Agent registrado! agentId = ${agentId}`, { url: tokenUrl, text: "ver NFT ↗" });
+    return {
+      ok: true,
+      txHash,
+      agentId,
+      baseScanToken: tokenUrl,
+      error: undefined
+    };
+  }
+
+  log("warn", "Tx enviada pero agentId no apareció tras 60s. Probá 'Check 8004' en unos segundos.");
+  return {
+    ok: true,
+    txHash,
+    agentId: null,
+    baseScanToken: null,
+    error: "timeout waiting for confirmation"
+  };
+}
+
 window.aixbWallet = {
   isConnected: () => currentAddress !== null,
   getAddress: () => currentAddress,
@@ -295,6 +510,8 @@ window.aixbWallet = {
   disconnectWallet,
   switchToBaseSepolia,
   payWithX402,
+  lookupAgent8004,
+  registerAgent8004,
   onAccountChanged: (cb) => { onAccountChangedCb = cb; },
   onChainChanged: (cb) => { onChainChangedCb = cb; }
 };
