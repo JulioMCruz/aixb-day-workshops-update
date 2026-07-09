@@ -9,6 +9,7 @@
   },
   "scripts": {
     "start": "tsx src/server.ts",
+    "build:web": "esbuild src/web/x402-client.ts --bundle --format=esm --target=es2022 --outfile=public/x402-client.js --minify --define:window=self",
     "workshop:1": "WORKSHOP_STAGE=1 PORT=3001 tsx src/server.ts",
     "workshop:2": "WORKSHOP_STAGE=2 PORT=3001 tsx src/server.ts",
     "workshop:3": "WORKSHOP_STAGE=3 PORT=3001 tsx src/server.ts",

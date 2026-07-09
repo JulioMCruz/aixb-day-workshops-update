@@ -1,6 +1,26 @@
-node_modules/
+# env files
 .env
-.env.*
-!.env.example
+.env.local
+.env.production
+
+# fixture wallet (do not commit)
 .aixb-wallet.fixture.json
+
+# node
+node_modules
+dist
+build
+
+# editor
+.vscode
+.idea
+.DS_Store
+
+# logs
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# tsbuild
+*.tsbuildinfo

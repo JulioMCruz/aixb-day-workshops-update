@@ -19,9 +19,10 @@ export type StageCapability = {
 
 export type NebiusResult = {
   integration: "live" | "fixture";
-  provider: "nebius-token-factory" | "local-fixture";
+  provider: "nebius-token-factory" | "groq" | "local-fixture";
   model?: string;
   text: string;
+  warnings?: string[];
 };
 
 export type RepoContext = {

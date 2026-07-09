@@ -35,7 +35,20 @@ function paymentPanel(config: AppConfig): string {
         <div class="button-row">
           <button id="job-without-payment" type="button">Probar sin firma</button>
           <button id="job-with-payment" type="button">Probar con firma x402</button>
+          <button id="job-connect-wallet" type="button" class="primary-action">Connect wallet</button>
+          <button id="job-pay-live" type="button" class="primary-action" hidden>Pagar con x402</button>
+          <button id="job-switch-network" type="button" hidden>Switch to Base Sepolia</button>
+          <button id="job-disconnect" type="button" hidden>Disconnect</button>
         </div>
+
+        <p class="hint" id="wallet-info" hidden></p>
+        <p class="hint live-hint" id="live-hint" hidden>
+          Modo live: el botón "Pay with x402" usa TU wallet (MetaMask, Coinbase Wallet, Rabby, etc.) para firmar el EIP-3009 y liquidar USDC real en Base Sepolia.
+        </p>
+
+        <section class="activity-log" id="activity-log" aria-live="polite">
+          <p class="empty">El log de actividad aparecerá aquí. Cada click registra un evento.</p>
+        </section>
 
         <section class="payment-output" id="payment-output">
           <p class="empty">El estado del gate de pagos aparecerá aquí.</p>
@@ -356,11 +369,74 @@ function appPage(config: AppConfig): string {
 
       .button-row {
         margin-top: 16px;
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
       }
 
       .button-row button {
         flex: 1;
+        min-width: 140px;
         width: auto;
+      }
+
+      .button-row button.primary-action {
+        background: var(--magenta);
+        color: var(--bg);
+        font-weight: 600;
+      }
+
+      .button-row button.primary-action:disabled {
+        background: var(--line);
+        color: var(--muted);
+        cursor: not-allowed;
+      }
+
+      .activity-log {
+        margin-top: 18px;
+        padding: 12px 14px;
+        background: rgba(7, 16, 24, 0.6);
+        border: 1px solid var(--line);
+        font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+        max-height: 260px;
+        overflow-y: auto;
+      }
+
+      .activity-log .log-entry {
+        display: grid;
+        grid-template-columns: 70px 18px 1fr;
+        gap: 8px;
+        padding: 2px 0;
+        align-items: baseline;
+      }
+
+      .activity-log .log-time {
+        color: var(--muted);
+      }
+
+      .activity-log .log-icon {
+        text-align: center;
+      }
+
+      .activity-log .log-msg {
+        color: var(--text);
+        word-break: break-word;
+      }
+
+      .activity-log .log-entry.info .log-icon { color: var(--cyan); }
+      .activity-log .log-entry.ok .log-icon { color: #6cf09a; }
+      .activity-log .log-entry.ok .log-msg { color: #b8f5cd; }
+      .activity-log .log-entry.warn .log-icon { color: var(--warn); }
+      .activity-log .log-entry.error .log-icon { color: #ff6b6b; }
+      .activity-log .log-entry.error .log-msg { color: #ffb3b3; }
+
+      .live-hint {
+        margin-top: 12px;
+        padding: 8px 12px;
+        background: rgba(255, 42, 163, 0.08);
+        border-left: 2px solid var(--magenta);
+        font-size: 13px;
       }
 
       .payment-output {
@@ -485,13 +561,90 @@ function appPage(config: AppConfig): string {
       if (paymentsPanel) {
         const paymentToggle = document.querySelector("#payment-toggle");
         const paymentOutput = document.querySelector("#payment-output");
+        const activityLog = document.querySelector("#activity-log");
+        const liveHint = document.querySelector("#live-hint");
         const jobTask = document.querySelector("#job-task");
         const jobInput = document.querySelector("#job-input");
         const jobWithoutPayment = document.querySelector("#job-without-payment");
         const jobWithPayment = document.querySelector("#job-with-payment");
+        const jobConnectWallet = document.querySelector("#job-connect-wallet");
+        const jobPayLive = document.querySelector("#job-pay-live");
+        const jobSwitchNetwork = document.querySelector("#job-switch-network");
+        const jobDisconnect = document.querySelector("#job-disconnect");
+        const walletInfo = document.querySelector("#wallet-info");
         let activePaymentMode = { live: false, ready: false, label: "fixture" };
+        let eventCount = 0;
+
+        function logEvent(level, message) {
+          if (!activityLog) return;
+          eventCount += 1;
+          const time = new Date().toTimeString().slice(0, 8);
+          const iconMap = { info: "·", warn: "!", error: "✗", ok: "✓" };
+          const icon = iconMap[level] || "·";
+          if (eventCount === 1) {
+            activityLog.innerHTML = "";
+          }
+          const entry = document.createElement("div");
+          entry.className = "log-entry " + level;
+          entry.innerHTML =
+            '<span class="log-time">' + time + '</span>' +
+            '<span class="log-icon">' + icon + '</span>' +
+            '<span class="log-msg">' + escapeHtml(message) + '</span>';
+          activityLog.appendChild(entry);
+          activityLog.scrollTop = activityLog.scrollHeight;
+        }
+
+        function refreshLiveControls() {
+          const live = activePaymentMode.live === true && activePaymentMode.ready === true;
+          if (jobPayLive && !window.aixbWallet) {
+            jobPayLive.disabled = !live;
+            jobPayLive.title = live
+              ? "Ejecutar pago x402 real en Base Sepolia"
+              : "Disponible solo cuando X402_MODE=base-sepolia y la wallet está lista";
+          }
+          if (liveHint && !window.aixbWallet) {
+            liveHint.hidden = !live;
+          }
+        }
+
+        function refreshWalletControls() {
+          if (!window.aixbWallet) return;
+          const isConnected = window.aixbWallet.isConnected();
+          const chainId = window.aixbWallet.getChainId();
+          const isBaseSepolia = chainId === 84532;
+          const live = activePaymentMode.live === true;
+
+          if (jobConnectWallet) {
+            jobConnectWallet.hidden = isConnected;
+            jobConnectWallet.disabled = false;
+          }
+          if (jobPayLive) {
+            jobPayLive.hidden = !isConnected || !live;
+            jobPayLive.disabled = !isConnected || !isBaseSepolia;
+            jobPayLive.textContent = "Pay with x402";
+          }
+          if (jobSwitchNetwork) {
+            jobSwitchNetwork.hidden = !isConnected || isBaseSepolia;
+          }
+          if (jobDisconnect) {
+            jobDisconnect.hidden = !isConnected;
+          }
+          if (walletInfo) {
+            if (isConnected) {
+              const addr = window.aixbWallet.getAddress();
+              const short = addr ? (addr.slice(0, 6) + "..." + addr.slice(-4)) : "";
+              walletInfo.hidden = false;
+              walletInfo.textContent = isBaseSepolia
+                ? "Wallet: " + short + " on Base Sepolia ✓"
+                : "Wallet: " + short + " (red " + chainId + " — cambiá a Base Sepolia para pagar)";
+            } else {
+              walletInfo.hidden = true;
+            }
+          }
+        }
 
         function renderPaymentState(data) {
+          const previousLive = activePaymentMode.live === true;
           activePaymentMode = data.mode || activePaymentMode;
           paymentToggle.checked = data.paymentsEnabled === true;
           jobWithPayment.disabled = activePaymentMode.live === true;
@@ -504,11 +657,16 @@ function appPage(config: AppConfig): string {
             '</div>' +
             '<p class="mentor-text">' +
               (activePaymentMode.live
-                ? 'Base Sepolia live: el switch activa x402 real; el pago firmado se prueba con npm run x402:pay para no exponer llaves en el navegador.'
+                ? 'Base Sepolia live: el switch activa x402 real. Conectá tu wallet y usá el botón "Pay with x402" para pagar con tu propio USDC.'
                 : data.paymentsEnabled
                   ? 'Pagos encendidos: POST /jobs requiere PAYMENT-SIGNATURE.'
                   : 'Pagos apagados: POST /jobs ejecuta como demo sin pago.') +
             '</p>';
+          refreshLiveControls();
+          refreshWalletControls();
+          if (previousLive !== (activePaymentMode.live === true)) {
+            logEvent(activePaymentMode.live ? "ok" : "info", "Server mode: " + (activePaymentMode.label || "fixture"));
+          }
         }
 
         async function loadPaymentMode() {
@@ -518,24 +676,26 @@ function appPage(config: AppConfig): string {
         }
 
         async function setPaymentMode(enabled) {
+          logEvent("info", "Click switch → " + (enabled ? "ON" : "OFF") + ". Sending POST /payment-mode");
           const response = await fetch("/payment-mode", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ enabled })
           });
           const data = await response.json();
+          logEvent(response.ok ? "ok" : "error", "POST /payment-mode → " + response.status + " (x402: " + (data.paymentsEnabled ? "ON" : "OFF") + ")");
           renderPaymentState(data);
         }
 
         async function runJob(withSignature) {
           if (withSignature && activePaymentMode.live) {
-            paymentOutput.innerHTML =
-              '<div class="status-row">' +
-                '<span class="chip">mode: ' + escapeHtml(activePaymentMode.label || 'base-sepolia-live') + '</span>' +
-              '</div>' +
-              '<p class="mentor-text">Usa <code>npm run x402:pay</code> desde <code>server/</code> para ejecutar el pago Base Sepolia con una private key local.</p>';
+            logEvent("warn", "El botón fixture está deshabilitado en live mode. Usá 'Pay with x402' con tu wallet.");
             return;
           }
+
+          logEvent("info", withSignature
+            ? "Click 'Probar con firma x402' → POST /jobs con PAYMENT-SIGNATURE: x402-fixture-paid"
+            : "Click 'Probar sin firma' → POST /jobs sin header de pago");
 
           paymentOutput.innerHTML = '<p class="empty">Ejecutando job...</p>';
           const headers = { "content-type": "application/json" };
@@ -553,6 +713,33 @@ function appPage(config: AppConfig): string {
           });
           const data = await response.json();
           const paymentRequired = response.headers.get("PAYMENT-REQUIRED");
+          logEvent(
+            response.ok ? "ok" : "warn",
+            "POST /jobs → " + response.status + " " + (response.ok ? "executed" : "rejected") +
+            (paymentRequired ? " (with PAYMENT-REQUIRED header)" : "")
+          );
+          if (paymentRequired) {
+            try {
+              const decoded = atob(paymentRequired);
+              const parsed = JSON.parse(decoded);
+              const accept = parsed && parsed.accepts && parsed.accepts[0];
+              if (accept) {
+                logEvent("info", "Decoded 402: scheme=" + accept.scheme + ", amount=" + accept.amount + ", payTo=" + (accept.payTo || "?").slice(0, 10) + "..., network=" + accept.network);
+              }
+            } catch (e) {
+              logEvent("warn", "Could not decode PAYMENT-REQUIRED header");
+            }
+          }
+          if (response.ok) {
+            logEvent("ok", "Job completed: " + (data.id || "?") + " (integration=" + (data.integration || "?") + ")");
+            if (data.receipt) {
+              logEvent("ok", "x402 receipt: verified=" + data.receipt.verified + ", network=" + data.receipt.network);
+            }
+            if (data.erc8004Feedback) {
+              const fb = data.erc8004Feedback;
+              logEvent("ok", "ERC-8004 feedback: value=" + fb.value + " tag1=" + fb.tag1 + " tag2=" + fb.tag2);
+            }
+          }
           paymentOutput.innerHTML =
             '<div class="status-row">' +
               '<span class="chip">HTTP: ' + response.status + '</span>' +
@@ -562,29 +749,152 @@ function appPage(config: AppConfig): string {
             '<pre class="mentor-text">' + escapeHtml(JSON.stringify(data, null, 2)) + '</pre>';
         }
 
+        async function payWithBrowserWallet() {
+          if (!window.aixbWallet) {
+            logEvent("error", "Wallet client no cargado. Refrescá la página.");
+            return;
+          }
+          if (!window.aixbWallet.isConnected()) {
+            logEvent("error", "Primero hacé click en 'Connect wallet'.");
+            return;
+          }
+          if (window.aixbWallet.getChainId() !== 84532) {
+            logEvent("error", "Cambiá a Base Sepolia primero.");
+            return;
+          }
+          jobPayLive.disabled = true;
+          jobPayLive.textContent = "Pago en curso...";
+          paymentOutput.innerHTML = '<p class="empty">Tu wallet firmará un EIP-3009 y pagará USDC en Base Sepolia...</p>';
+
+          try {
+            const result = await window.aixbWallet.payWithX402(jobTask.value, jobInput.value);
+            if (result.ok && result.txHash) {
+              paymentOutput.innerHTML =
+                '<div class="status-row">' +
+                  '<span class="chip">HTTP: ' + result.status + '</span>' +
+                  '<span class="chip">x402: SETTLED</span>' +
+                  '<span class="chip">tx: ' + result.txHash.slice(0, 12) + '...</span>' +
+                '</div>' +
+                '<p class="mentor-text">Pago liquidado onchain con TU wallet. Job completado y feedback ERC-8004 emitido.</p>' +
+                '<pre class="mentor-text">' + escapeHtml(JSON.stringify(result.body, null, 2)) + '</pre>';
+            } else {
+              paymentOutput.innerHTML = '<p class="error">Pago no liquidado: ' + escapeHtml(result.error || "?") + '</p>';
+            }
+          } catch (error) {
+            logEvent("error", "Error en pago: " + (error.message || error));
+            paymentOutput.innerHTML = '<p class="error">' + escapeHtml(error.message || error) + '</p>';
+          } finally {
+            jobPayLive.disabled = false;
+            jobPayLive.textContent = "Pay with x402";
+            refreshWalletControls();
+          }
+        }
+
+        async function connectWalletHandler() {
+          if (!window.aixbWallet) {
+            logEvent("error", "Wallet client no cargado. Refrescá la página.");
+            return;
+          }
+          jobConnectWallet.disabled = true;
+          try {
+            await window.aixbWallet.connectWallet();
+          } catch (error) {
+            logEvent("error", "Connect failed: " + (error.message || error));
+          } finally {
+            jobConnectWallet.disabled = false;
+            refreshWalletControls();
+          }
+        }
+
+        async function switchNetworkHandler() {
+          if (!window.aixbWallet) return;
+          try {
+            await window.aixbWallet.switchToBaseSepolia();
+          } catch (error) {
+            logEvent("error", "Switch failed: " + (error.message || error));
+          } finally {
+            refreshWalletControls();
+          }
+        }
+
+        function disconnectWalletHandler() {
+          if (!window.aixbWallet) return;
+          window.aixbWallet.disconnectWallet();
+          logEvent("info", "Wallet desconectada");
+          refreshWalletControls();
+        }
+
         paymentToggle.addEventListener("change", () => {
           setPaymentMode(paymentToggle.checked).catch((error) => {
+            logEvent("error", "Error en switch: " + (error.message || error));
             paymentOutput.innerHTML = '<p class="error">' + escapeHtml(error.message || error) + '</p>';
           });
         });
 
         jobWithoutPayment.addEventListener("click", () => {
           runJob(false).catch((error) => {
+            logEvent("error", "Error: " + (error.message || error));
             paymentOutput.innerHTML = '<p class="error">' + escapeHtml(error.message || error) + '</p>';
           });
         });
 
         jobWithPayment.addEventListener("click", () => {
           runJob(true).catch((error) => {
+            logEvent("error", "Error: " + (error.message || error));
             paymentOutput.innerHTML = '<p class="error">' + escapeHtml(error.message || error) + '</p>';
           });
         });
 
-        loadPaymentMode().catch((error) => {
+        if (jobConnectWallet) {
+          jobConnectWallet.addEventListener("click", () => {
+            connectWalletHandler().catch((error) => {
+              logEvent("error", "Error: " + (error.message || error));
+            });
+          });
+        }
+
+        if (jobPayLive) {
+          jobPayLive.addEventListener("click", () => {
+            payWithBrowserWallet().catch((error) => {
+              logEvent("error", "Error: " + (error.message || error));
+            });
+          });
+        }
+
+        if (jobSwitchNetwork) {
+          jobSwitchNetwork.addEventListener("click", () => {
+            switchNetworkHandler().catch((error) => {
+              logEvent("error", "Error: " + (error.message || error));
+            });
+          });
+        }
+
+        if (jobDisconnect) {
+          jobDisconnect.addEventListener("click", () => {
+            disconnectWalletHandler();
+          });
+        }
+
+        // Init: configure el logger del bundle, luego cargá /payment-mode
+        if (window.aixbSetLog) {
+          window.aixbSetLog(logEvent);
+        }
+        if (window.aixbWallet) {
+          window.aixbWallet.onAccountChanged(() => refreshWalletControls());
+          window.aixbWallet.onChainChanged(() => refreshWalletControls());
+        }
+
+        loadPaymentMode().then(() => {
+          logEvent("info", "Web cargada. Switch " + (paymentToggle.checked ? "ON" : "OFF") + ". Click 'Activar pagos x402' o 'Probar sin firma' para empezar.");
+          refreshLiveControls();
+          refreshWalletControls();
+        }).catch((error) => {
+          logEvent("error", "Error cargando /payment-mode: " + (error.message || error));
           paymentOutput.innerHTML = '<p class="error">' + escapeHtml(error.message || error) + '</p>';
         });
       }
     </script>
+    <script type="module" src="/x402-client.js"></script>
   </body>
 </html>`;
 }
