@@ -5,6 +5,7 @@ function paymentPanel(config: AppConfig): string {
   if (config.stage < 4) return "";
 
   return `<section class="panel stage4-panel" id="payments-panel">
+        <p id="debug-overlay" style="background: #1a1a2e; color: #00ff88; padding: 4px 8px; font-family: monospace; font-size: 11px; border-radius: 4px; margin: 0 0 8px 0;">debug: pending (no /payment-mode response yet)</p>
         <div class="stage4-head">
           <div>
             <p class="eyebrow">Workshop 4 / x402</p>
@@ -642,6 +643,7 @@ function appPage(config: AppConfig): string {
         const erc8004Check = document.querySelector("#erc8004-check");
         const erc8004Register = document.querySelector("#erc8004-register");
         const erc8004Output = document.querySelector("#erc8004-output");
+        const debugOverlay = document.querySelector("#debug-overlay");
         let activePaymentMode = { live: false, ready: false, label: "fixture" };
         // Server's seller wallet address (X402_PAY_TO). Updated by /payment-mode.
         let agentWalletAddress = null;
@@ -747,6 +749,22 @@ function appPage(config: AppConfig): string {
           if (erc8004Panel) {
             erc8004Panel.hidden = !isConnected || !gateOn;
           }
+          updateDebugOverlay();
+        }
+
+        function updateDebugOverlay() {
+          if (!debugOverlay) return;
+          const isConnected = window.aixbWallet ? window.aixbWallet.isConnected() : false;
+          const chainId = window.aixbWallet ? window.aixbWallet.getChainId() : null;
+          const gateOn = paymentsEnabled === true;
+          const connectHidden = jobConnectWallet ? jobConnectWallet.hidden : "missing";
+          debugOverlay.textContent = "debug: paymentsEnabled=" + paymentsEnabled
+            + " gateOn=" + gateOn
+            + " bundle=" + Boolean(window.aixbWallet)
+            + " isConnected=" + isConnected
+            + " chainId=" + chainId
+            + " connectBtn.hidden=" + connectHidden
+            + " (commit 67bfdb3)";
         }
 
         function renderPaymentState(data) {
@@ -771,6 +789,7 @@ function appPage(config: AppConfig): string {
               agentWalletInfo.hidden = false;
             }
           }
+          updateDebugOverlay();
           paymentOutput.innerHTML =
             '<div class="status-row">' +
               '<span class="chip">x402: ' + (data.paymentsEnabled ? 'ON' : 'OFF') + '</span>' +
