@@ -585,6 +585,10 @@ function appPage(config: AppConfig): string {
         const jobDisconnect = document.querySelector("#job-disconnect");
         const walletInfo = document.querySelector("#wallet-info");
         let activePaymentMode = { live: false, ready: false, label: "fixture" };
+        // paymentsEnabled mirrors the server's payment-mode switch state.
+        // It is true only when the user has flipped "Activar pagos x402" ON
+        // AND the server is configured for live x402 (X402_MODE=base-sepolia).
+        let paymentsEnabled = false;
         let eventCount = 0;
 
         function logEvent(level, message, link) {
@@ -634,16 +638,20 @@ function appPage(config: AppConfig): string {
           const isConnected = window.aixbWallet.isConnected();
           const chainId = window.aixbWallet.getChainId();
           const isBaseSepolia = chainId === 84532;
-          const live = activePaymentMode.live === true;
+          // The wallet UI is gated by the user's switch, not the server's
+          // X402_MODE. paymentsEnabled is true only when the user has flipped
+          // the "Activar pagos x402" switch ON (the server is also expected
+          // to be in X402_MODE=base-sepolia for the flow to actually settle).
+          const gateOn = paymentsEnabled === true;
 
           if (jobConnectWallet) {
             // Connect wallet is only relevant when the x402 payment gate is on.
-            // Without live mode there is no "Pay with x402" button to unlock.
-            jobConnectWallet.hidden = isConnected || !live;
+            // Without the switch ON there is no "Pay with x402" button to unlock.
+            jobConnectWallet.hidden = isConnected || !gateOn;
             jobConnectWallet.disabled = false;
           }
           if (jobPayLive) {
-            jobPayLive.hidden = !isConnected || !live;
+            jobPayLive.hidden = !isConnected || !gateOn;
             jobPayLive.disabled = !isConnected || !isBaseSepolia;
             jobPayLive.textContent = "Pay with x402";
           }
@@ -652,7 +660,7 @@ function appPage(config: AppConfig): string {
           }
           if (jobDisconnect) {
             // Disconnect follows the same gate as Connect.
-            jobDisconnect.hidden = !isConnected || !live;
+            jobDisconnect.hidden = !isConnected || !gateOn;
           }
           if (walletInfo) {
             if (isConnected) {
@@ -671,7 +679,8 @@ function appPage(config: AppConfig): string {
         function renderPaymentState(data) {
           const previousLive = activePaymentMode.live === true;
           activePaymentMode = data.mode || activePaymentMode;
-          paymentToggle.checked = data.paymentsEnabled === true;
+          paymentsEnabled = data.paymentsEnabled === true;
+          paymentToggle.checked = paymentsEnabled;
           jobWithPayment.disabled = activePaymentMode.live === true;
           jobWithPayment.textContent = activePaymentMode.live ? "Pagar desde CLI" : "Probar con firma x402";
           paymentOutput.innerHTML =
