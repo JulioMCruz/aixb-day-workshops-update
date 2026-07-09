@@ -288,41 +288,38 @@ can do.
 > registration proves *which* agent they paid. They are complementary
 > rails, not competitors.
 
-The workshop UI exposes a 2-button flow on top of the wallet panel:
+The workshop UI exposes a 1-button flow for the seller agent:
 
 - **Check 8004 registration** — calls `GET /agents/<address>` and
-  reads the `IdentityRegistry` onchain. If your wallet already owns
-  an agent NFT, you'll see `agentId` and a clickable BaseScan link.
-- **Register on 8004** — builds a `data:application/json;base64,...`
-  `agentURI` that points to your agent's metadata (name, description,
-  services, image, x402 support), encodes the call data for
-  `register(string)`, and asks your wallet to send the transaction.
-  You sign in MetaMask / Coinbase Wallet / Rabby and pay gas from
-  your own ETH balance.
-
+  reads the `IdentityRegistry` onchain. If the seller wallet already
+  owns an agent NFT, you'll see `agentId` and a clickable BaseScan link.
 - **Register seller agent (server-side)** — the workshop's seller
-  wallet (`AGENT_PRIVATE_KEY`) signs and sends the same `register()`
+  wallet (`AGENT_PRIVATE_KEY`) signs and sends the `register()`
   tx. The NFT owner is the seller, which matches `X402_PAY_TO`. This
-  is the canonical agent identity for the workshop demo, separate
-  from the user wallet. No MetaMask needed: the server does it.
-  Requires `AGENT_PRIVATE_KEY` to be set in `.env` and the wallet
-  to have ETH for gas. Idempotent: a second click returns the same
-  `agentId` without sending a new tx.
+  is the canonical agent identity for the workshop demo. No MetaMask
+  needed: the server does it. Requires `AGENT_PRIVATE_KEY` to be set
+  in `.env` and the wallet to have ETH for gas. Idempotent: a second
+  click returns the same `agentId` without sending a new tx.
 
-### Two flows, two owners
+### Why server-side, not browser-side
 
-ERC-8004 design: the owner of the NFT is whoever pays gas. The two
-buttons reflect the two distinct identity questions:
+ERC-8004 design: the owner of the NFT is whoever pays gas. The
+server-side flow reflects the canonical identity question:
 
-| Button | Who pays gas | NFT owner | Use case |
-|--------|--------------|-----------|----------|
-| Register on 8004 | User's MetaMask | User's wallet | "I, as a user, am also an agent" |
-| Register seller agent (server-side) | Seller wallet (AGENT_PRIVATE_KEY) | Seller wallet (X402_PAY_TO) | "This is the canonical agent that receives x402" |
+| Flow | Who pays gas | NFT owner | Use case |
+|------|--------------|-----------|----------|
+| **Server-side** (the workshop default) | Seller wallet (AGENT_PRIVATE_KEY) | Seller wallet (X402_PAY_TO) | "This is the canonical agent that receives x402" |
 
-For the workshop demo, the second flow is the one that demonstrates
-the separation between **user** (pays with EIP-3009) and **agent**
-(has its own onchain identity). User reputation is ephemeral; agent
-reputation persists in the ERC-8004 `ReputationRegistry`.
+For the workshop demo, the server-side flow is the one that
+demonstrates the separation between **user** (pays with EIP-3009)
+and **agent** (has its own onchain identity). User reputation is
+ephemeral; agent reputation persists in the ERC-8004
+`ReputationRegistry`.
+
+(An earlier version of the UI had a browser-side button that signed
+the `register()` tx with the user's MetaMask. It was removed because
+it registered the user wallet as the agent owner, which conceptually
+breaks the user/agent separation that ERC-8004 is designed to support.)
 
 ### 8.1 — What the server builds for you
 
@@ -360,31 +357,29 @@ curl -sS http://localhost:3012/agents/0xYOUR_ADDRESS | jq .
 curl -sS http://localhost:3012/agents/registry-info | jq .
 ```
 
-### 8.2 — Register your wallet onchain
+### 8.2 — Register the seller agent onchain
 
-1. Open the workshop UI at <http://localhost:3012/>.
-2. Make sure the **Activar pagos x402** switch is ON and your wallet is
-   connected on Base Sepolia.
+1. Open the workshop UI at <http://localhost:3001/>.
+2. Make sure the **Activar pagos x402** switch is ON.
 3. Scroll down to the **ERC-8004 identity** section.
-4. Click **Check 8004 registration**.
-5. If you see `NOT REGISTERED`, click **Register on 8004**.
-6. Your wallet (MetaMask / Coinbase Wallet / Rabby) will pop up asking
-   you to confirm a transaction to
-   `0x8004A818BFB912233c491871b3d84c89A494BD9e` (the
-   `IdentityRegistry`). The call data encodes `register(string)` with
-   the `agentURI` from step 8.1.
-7. Confirm the transaction. It costs a small amount of Base Sepolia
-   ETH for gas.
-8. Wait ~10 seconds. The UI polls `GET /agents/<address>` every 2s for
-   up to 60s. When the agent NFT is visible, you'll see `agentId` and
-   a clickable BaseScan link to the token.
-9. Re-run **Check 8004 registration** any time to confirm.
+4. Click **Check 8004 registration** to read the seller wallet's
+   current onchain state. If it shows `NOT REGISTERED`, continue.
+5. Click **Register seller agent (server-side)**. The server signs
+   the `register()` tx with `AGENT_PRIVATE_KEY` and sends it from
+   the seller wallet to the `IdentityRegistry` at
+   `0x8004A818BFB912233c491871b3d84c89A494BD9e`. The seller wallet
+   pays gas from its own ETH balance.
+6. Wait ~10 seconds. The server returns the `agentId` and `txHash`.
+7. The UI shows a clickable BaseScan link to the new agent NFT.
+8. Re-run **Check 8004 registration** any time to confirm. The
+   button is idempotent: a second click returns the same `agentId`
+   without sending a new tx.
 
-The activity log will show 3 events:
+The activity log will show 3 events for this step:
 
-- `ERC-8004 feedback: value=100 tag1=x402PaidJob ...` (from the x402
-  paid job — Step 7 left this in your log)
-- `Wallet conectada: 0x1234...`
+- `[1/3] Enviando POST /agents/register-server...`
+- `[2/3] Tx settled: 0x...` (with a clickable BaseScan link)
+- `[3/3] Seller agent registrado: owner=0x6ae164B7... agentId=#7902`
 - `Call data encodeado (N bytes)` — encoded register call data
 - `Tx enviada: 0xabc...` — with a clickable `ver tx ↗` link to BaseScan
 - `¡Agent registrado! agentId = N` — with a clickable `ver NFT ↗` link
@@ -398,58 +393,56 @@ The activity log will show 3 events:
 > See the live token at
 > <https://sepolia.basescan.org/token/0x8004A818BFB912233c491871b3d84c89A494BD9e?a=0x4a8FFDA35Fd4463E881a0E69215B547FE8EFCEd4>.
 
-#### Sequence diagram — ERC-8004 register flow
+#### Sequence diagram — ERC-8004 register flow (server-side)
 
-The flow your wallet will go through when you click "Register on 8004":
+The flow when the participant clicks "Register seller agent (server-side)":
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor U as Participant<br/>(MetaMask)
-    participant B as Browser<br/>(x402-client.js)
-    participant S as Server<br/>(:3012)
+    actor U as Participant<br/>(browser)
+    participant B as Browser
+    participant S as Server<br/>(:3001)
+    participant W as Seller wallet<br/>(AGENT_PRIVATE_KEY)
     participant R as Base Sepolia<br/>IdentityRegistry<br/>0x8004A818...
     participant BS as BaseScan
 
-    U->>B: Click "Register on 8004"
+    U->>B: Click "Register seller agent<br/>(server-side)"
     activate B
-    B->>S: GET /agents/<address>
+    B->>S: POST /agents/register-server
     activate S
+    S->>W: privateKeyToAccount(pk)
+    W-->>S: account.address
+    S->>S: lookupAgent(address)
     S->>R: balanceOf(address) [view]
     R-->>S: 0 (not registered)
     S->>S: buildSelfRegistrationURI()
     Note over S: inline data:application/json;base64,...
-    S-->>B: 200 {registered:false, selfRegistrationURI}
-    deactivate S
-
-    B->>B: viem.encodeFunctionData<br/>(register, [agentURI])
-    B->>U: MetaMask popup:<br/>"Confirm transaction"
-    activate U
-    Note over U: User clicks Confirm<br/>(pays gas from own ETH)
-    U->>R: eth_sendTransaction<br/>(to=registry, data=callData)
-    deactivate U
+    S->>W: createWalletClient.writeContract(<br/>register, [agentURI])
+    activate W
+    Note over W: Seller signs tx<br/>(pays gas from own ETH)
+    W->>R: register(agentURI)
+    deactivate W
     activate R
-    R->>R: register(agentURI)<br/>mint NFT to user
+    R->>R: mint NFT to seller
     R-->>BS: tx mined
-    R-->>B: txHash
+    R-->>W: txHash
     deactivate R
-
-    loop poll every 2s, max 30 attempts
-      B->>S: GET /agents/<address>
-      S->>R: balanceOf(address)
-      R-->>S: 1
-      S->>R: getLogs(Registered, owner=address)
-      R-->>S: [Registered event]
-      S-->>B: 200 {registered:true, agentId:#N}
-    end
-
+    S->>S: parse Registered event<br/>extract agentId
+    S-->>B: 200 {agentId, txHash, owner, baseScanToken}
+    deactivate S
     B-->>U: UI shows "agentId = #N"<br/>+ clickable BaseScan links
     deactivate B
 ```
 
 Each numbered step corresponds to a `logEvent()` entry in the activity
 panel on the workshop UI. The student watches the steps happen in
-real time as the wallet and the blockchain respond.
+real time as the server signs and the blockchain responds.
+
+Key difference from the previous (removed) browser-side flow: **no
+MetaMask popup**. The seller wallet (`AGENT_PRIVATE_KEY`) signs the
+tx on the server. The NFT owner is the seller (which matches
+`X402_PAY_TO`), not the user.
 
 ### 8.3 — Code: how it works
 
