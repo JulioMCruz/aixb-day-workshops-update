@@ -4,7 +4,7 @@ import type { Network } from "@x402/core/types";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { paymentMiddleware } from "@x402/hono";
 import type { Context, MiddlewareHandler } from "hono";
-import { createAgentRegistration, createFeedback, lookupAgent, buildSelfRegistrationURI, ERC8004_IDENTITY_REGISTRY_BASESEPOLIA } from "../integrations/erc8004.js";
+import { createAgentRegistration, createFeedback, lookupAgent, buildSelfRegistrationURI, serverRegisterAgent, ERC8004_IDENTITY_REGISTRY_BASESEPOLIA } from "../integrations/erc8004.js";
 import { readWallet } from "../integrations/wallet.js";
 import {
   createPaymentRequired,
@@ -204,6 +204,29 @@ export function registerJobRoutes(app: App, config: AppConfig): void {
         ? null
         : buildSelfRegistrationURI(config, result.address)
     });
+  });
+
+  // Server-side agent registration: AGENT_PRIVATE_KEY signs and sends the
+  // tx from the seller wallet. The resulting NFT owner is the seller, which
+  // matches X402_PAY_TO. This is the "real" identity for the agent that
+  // receives x402 payments.
+  app.post("/agents/register-server", async (c) => {
+    const unavailable = requireStage(c, config, 4);
+    if (unavailable) return unavailable;
+    if (!config.env.AGENT_PRIVATE_KEY) {
+      return c.json({ ok: false, error: "AGENT_PRIVATE_KEY not set in .env" }, 400);
+    }
+    try {
+      const result = await serverRegisterAgent(config);
+      return c.json({
+        ok: true,
+        ...result,
+        baseScanToken: `https://sepolia.basescan.org/token/${ERC8004_IDENTITY_REGISTRY_BASESEPOLIA}?a=${result.owner}`
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ ok: false, error: message }, 500);
+    }
   });
 
   app.get("/payment-mode", (c) => {

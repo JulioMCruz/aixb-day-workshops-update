@@ -8,6 +8,7 @@ import {
   type Hex,
   isAddress
 } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia } from "viem/chains";
 import type { AppConfig } from "../types.js";
 import type { X402Verification } from "./x402.js";
@@ -366,4 +367,124 @@ export function encodeRegisterCallData(agentURI: string): Hex {
     functionName: "register",
     args: [agentURI]
   });
+}
+
+// ---------------------------------------------------------------------------
+// Server-side register: AGENT_PRIVATE_KEY signs and sends the tx.
+// Returns { agentId, txHash, agentURI, owner }.
+// The owner is the seller (derived from AGENT_PRIVATE_KEY) and matches
+// X402_PAY_TO. This way the ERC-8004 NFT owner is consistent with the
+// x402 payment receiver — the agent owns its own identity, the user
+// just pays x402 to use the service.
+// ---------------------------------------------------------------------------
+export interface ServerRegisterResult {
+  agentId: number;
+  txHash: Hex;
+  agentURI: string;
+  owner: Address;
+  alreadyRegistered: boolean;
+}
+
+export async function serverRegisterAgent(config: AppConfig): Promise<ServerRegisterResult> {
+  const pk = config.env.AGENT_PRIVATE_KEY;
+  if (!pk) {
+    throw new Error("AGENT_PRIVATE_KEY not set in .env");
+  }
+  const normalized = pk.startsWith("0x") ? pk : `0x${pk}`;
+  const account = privateKeyToAccount(normalized as `0x${string}`);
+  const owner = account.address;
+  const client = createPublicClient({
+    chain: baseSepolia,
+    transport: http(rpcUrlForBaseSepolia(config))
+  });
+
+  // 1. If the seller is already registered, return the existing agentId.
+  const existing = await lookupAgent(config, owner);
+  if (existing.ok && existing.registered && existing.agentId !== null) {
+    return {
+      agentId: existing.agentId,
+      txHash: existing.registrationTxHash ?? "0x0",
+      agentURI: existing.agentURI ?? "",
+      owner,
+      alreadyRegistered: true
+    };
+  }
+
+  // 2. Build the registration URI with the seller as owner.
+  const agentURI = buildSelfRegistrationURI(config, owner);
+  // Patch registrations[].agentId to 0 explicitly (kept for the schema).
+  // We can't fill the real agentId until after the tx mines, but the
+  // log + lookup output will surface the real one.
+  const callData = encodeRegisterCallData(agentURI);
+
+  // 3. Send the tx from the seller wallet.
+  const walletClient = await import("viem").then((m) =>
+    m.createWalletClient({
+      account,
+      chain: baseSepolia,
+      transport: http(rpcUrlForBaseSepolia(config))
+    })
+  );
+  const txHash = await walletClient.sendTransaction({
+    to: ERC8004_IDENTITY_REGISTRY_BASESEPOLIA,
+    data: callData,
+    value: 0n,
+    chain: baseSepolia
+  });
+
+  // 4. Wait for the receipt.
+  const receipt = await client.waitForTransactionReceipt({ hash: txHash });
+  if (receipt.status !== "success") {
+    throw new Error(`register tx reverted: ${txHash}`);
+  }
+
+  // 5. Look up the new agentId by scanning the Registered event logs
+  //    emitted by this tx.
+  const agentId = await findAgentIdInReceipt(config, receipt);
+  return {
+    agentId,
+    txHash,
+    agentURI,
+    owner,
+    alreadyRegistered: false
+  };
+}
+
+async function findAgentIdInReceipt(
+  config: AppConfig,
+  receipt: { blockNumber: bigint; transactionHash: Hex; logs: ReadonlyArray<{ address: Address; data: Hex; topics: readonly Hex[] }> }
+): Promise<number> {
+  // Registered(uint256 agentId, string agentURI, address owner) topic on Base Sepolia
+  const REGISTERED_TOPIC = "0xca52e62c367d81bb2e328eb795f7c7ba24afb478408a26c0e201d155c449bc4a";
+  for (const log of receipt.logs) {
+    if (log.address.toLowerCase() !== ERC8004_IDENTITY_REGISTRY_BASESEPOLIA.toLowerCase()) continue;
+    if (log.topics.length < 3) continue;
+    if (log.topics[0]?.toLowerCase() !== REGISTERED_TOPIC) continue;
+    const agentIdHex = log.topics[1];
+    if (!agentIdHex) continue;
+    return Number(BigInt(agentIdHex));
+  }
+  // Fallback: re-scan the contract events at this block.
+  const client = createPublicClient({
+    chain: baseSepolia,
+    transport: http(rpcUrlForBaseSepolia(config))
+  });
+  const eventAbi = parseAbiItem("event Registered(uint256 agentId, string agentURI, address owner)");
+  const events = await client.getLogs({
+    address: ERC8004_IDENTITY_REGISTRY_BASESEPOLIA,
+    events: [eventAbi],
+    fromBlock: receipt.blockNumber,
+    toBlock: receipt.blockNumber
+  });
+  if (events.length === 0) {
+    throw new Error(`No Registered event found in tx ${receipt.transactionHash}`);
+  }
+  type RegisteredEvent = { transactionHash?: Hex; args?: { agentId?: bigint } };
+  const list = events as unknown as RegisteredEvent[];
+  const match = list.find((e) => e.transactionHash === receipt.transactionHash);
+  const ev = match ?? list[0];
+  if (!ev) throw new Error("No event match");
+  const args = ev.args;
+  if (!args || args.agentId === undefined) throw new Error("Event missing agentId");
+  return Number(args.agentId);
 }

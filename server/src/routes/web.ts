@@ -56,6 +56,7 @@ function paymentPanel(config: AppConfig): string {
           <div class="button-row">
             <button id="erc8004-check" type="button">Check 8004 registration</button>
             <button id="erc8004-register" type="button" class="primary-action" hidden>Register on 8004</button>
+            <button id="erc8004-register-server" type="button" class="primary-action" hidden>Register seller agent (server-side)</button>
           </div>
           <pre class="erc8004-output" id="erc8004-output" hidden></pre>
         </section>
@@ -749,6 +750,13 @@ function appPage(config: AppConfig): string {
           if (erc8004Panel) {
             erc8004Panel.hidden = !isConnected || !gateOn;
           }
+          // The 'Register seller agent' button doesn't need a connected
+          // wallet — the server signs with AGENT_PRIVATE_KEY. Show it
+          // whenever the gate is on.
+          const erc8004RegisterServerBtn = document.querySelector("#erc8004-register-server");
+          if (erc8004RegisterServerBtn) {
+            erc8004RegisterServerBtn.hidden = !gateOn;
+          }
           updateDebugOverlay();
         }
 
@@ -1017,6 +1025,38 @@ function appPage(config: AppConfig): string {
           }
         }
 
+        async function registerSellerAgentHandler() {
+          const btn = erc8004RegisterServer;
+          if (btn) btn.disabled = true;
+          try {
+            logEvent("info", "═══ REGISTER SELLER AGENT (server-side) ═══");
+            logEvent("info", "[1/3] Enviando POST /agents/register-server. AGENT_PRIVATE_KEY firma y paga gas.");
+            const response = await fetch("/agents/register-server", { method: "POST" });
+            const data = await response.json();
+            if (!response.ok || !data.ok) {
+              throw new Error(data.error || ("HTTP " + response.status));
+            }
+            logEvent("ok", "[2/3] Tx settled: " + data.txHash, { url: "https://sepolia.basescan.org/tx/" + data.txHash, text: "ver tx en BaseScan" });
+            logEvent("ok", "[3/3] Seller agent registrado: owner=" + data.owner + " agentId=#" + data.agentId + (data.alreadyRegistered ? " (ya estaba registrado)" : ""));
+            logEvent("ok", "Ver NFT: " + data.baseScanToken);
+            logEvent("info", "═══ FIN REGISTER SELLER: agentId=#" + data.agentId + " ═══");
+            if (erc8004Output) {
+              erc8004Output.hidden = false;
+              erc8004Output.className = "erc8004-output registered";
+              erc8004Output.textContent = "SELLER AGENT REGISTRADO\\n  owner: " + data.owner + "\\n  agentId: #" + data.agentId + "\\n  txHash: " + data.txHash + "\\n  BaseScan: " + data.baseScanToken;
+            }
+          } catch (err) {
+            logEvent("error", "register-seller failed: " + (err.message || err));
+            if (erc8004Output) {
+              erc8004Output.hidden = false;
+              erc8004Output.className = "erc8004-output error";
+              erc8004Output.textContent = "Error: " + (err.message || err);
+            }
+          } finally {
+            if (btn) btn.disabled = false;
+          }
+        }
+
         async function registerErc8004Handler() {
           if (!window.aixbWallet) {
             logEvent("error", "Wallet client no cargado. Refrescá la página.");
@@ -1103,6 +1143,15 @@ function appPage(config: AppConfig): string {
           erc8004Register.addEventListener("click", () => {
             registerErc8004Handler().catch((error) => {
               logEvent("error", "Register 8004 error: " + (error.message || error));
+            });
+          });
+        }
+
+        const erc8004RegisterServer = document.querySelector("#erc8004-register-server");
+        if (erc8004RegisterServer) {
+          erc8004RegisterServer.addEventListener("click", () => {
+            registerSellerAgentHandler().catch((error) => {
+              logEvent("error", "Register seller agent error: " + (error.message || error));
             });
           });
         }
