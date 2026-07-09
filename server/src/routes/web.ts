@@ -596,14 +596,18 @@ function appPage(config: AppConfig): string {
 
         function refreshLiveControls() {
           const live = activePaymentMode.live === true && activePaymentMode.ready === true;
-          if (jobPayLive && !window.aixbWallet) {
-            jobPayLive.disabled = !live;
-            jobPayLive.title = live
-              ? "Ejecutar pago x402 real en Base Sepolia"
-              : "Disponible solo cuando X402_MODE=base-sepolia y la wallet está lista";
-          }
-          if (liveHint && !window.aixbWallet) {
-            liveHint.hidden = !live;
+          // These controls are only relevant when the browser wallet bundle is loaded.
+          // Without the bundle there is no "Pay with x402" button to update.
+          if (window.aixbWallet) {
+            if (jobPayLive) {
+              jobPayLive.disabled = !live;
+              jobPayLive.title = live
+                ? "Ejecutar pago x402 real en Base Sepolia"
+                : "Disponible solo cuando X402_MODE=base-sepolia y la wallet está lista";
+            }
+            if (liveHint) {
+              liveHint.hidden = !live;
+            }
           }
         }
 
