@@ -707,12 +707,14 @@ function appPage(config: AppConfig): string {
           // the "Activar pagos x402" switch ON (the server is also expected
           // to be in X402_MODE=base-sepolia for the flow to actually settle).
           const gateOn = paymentsEnabled === true;
+          console.log("[refreshWalletControls] paymentsEnabled=" + paymentsEnabled + " gateOn=" + gateOn + " isConnected=" + isConnected);
 
           if (jobConnectWallet) {
             // Connect wallet is only relevant when the x402 payment gate is on.
             // Without the switch ON there is no "Pay with x402" button to unlock.
             jobConnectWallet.hidden = isConnected || !gateOn;
             jobConnectWallet.disabled = false;
+            console.log("[refreshWalletControls] jobConnectWallet.hidden=" + jobConnectWallet.hidden);
           }
           if (jobPayLive) {
             jobPayLive.hidden = !isConnected || !gateOn;
@@ -1105,7 +1107,7 @@ function appPage(config: AppConfig): string {
         });
       }
     </script>
-    <script type="module" src="/x402-client.js"></script>
+    <script type="module" src="/x402-client.js?v=3f53e07"></script>
   </body>
 </html>`;
 }
