@@ -220,6 +220,61 @@ Each participant signs with their own key, so the workshop can run with
 
 The facilitator wallet (`X402_PAY_TO`) receives USDC for every paid job.
 
+#### Sequence diagram — x402 real pay flow on Base Sepolia
+
+The flow that happens when the participant clicks "Pay with x402":
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Participant<br/>(MetaMask)
+    participant B as Browser<br/>(x402-client.js)
+    participant S as Server<br/>(:3012 /jobs)
+    participant F as Facilitator<br/>(Coinbase CDP)
+    participant USDC as USDC Contract<br/>0x036CbD538...
+    participant BS as BaseScan
+
+    U->>B: Click "Pay with x402"
+    activate B
+
+    B->>S: POST /jobs<br/>{task, input}<br/>(no PAYMENT-SIGNATURE)
+    activate S
+    S-->>B: 402 Payment Required<br/>+ PAYMENT-REQUIRED header
+    deactivate S
+    Note over S: BAZAR price=<X> USDC<br/>payTo=X402_PAY_TO<br/>network=eip155:84532
+
+    B->>B: Decode PAYMENT-REQUIRED<br/>build EIP-3009 typed data
+    B->>U: MetaMask popup:<br/>"Sign TransferWithAuthorization"
+    activate U
+    Note over U: User signs EIP-712<br/>(no gas, off-chain)
+    U-->>B: signature
+    deactivate U
+
+    B->>S: POST /jobs<br/>+ PAYMENT-SIGNATURE header
+    activate S
+    S->>F: POST /settle<br/>(payload + signature)
+    activate F
+    F->>USDC: transferWithAuthorization(...)<br/>(facilitator pays gas)
+    activate USDC
+    USDC-->>F: success
+    deactivate USDC
+    F-->>S: 200 {txHash, network, payer}
+    deactivate F
+    S-->>B: 201 {receipt, erc8004Feedback}
+    deactivate S
+    Note over S: receipt = job output<br/>erc8004Feedback.value = 100<br/>tag1 = x402PaidJob
+
+    B-->>U: UI shows "Tx settled onchain"<br/>+ clickable BaseScan URL<br/>+ ERC-8004 feedback
+    deactivate B
+    BS-->>BS: tx visible at<br/>sepolia.basescan.org/tx/<hash>
+```
+
+Each numbered step corresponds to a `logEvent()` entry in the activity
+panel. The student watches the browser, the facilitator, and the USDC
+contract interact in real time. Note that **the user only signs once**
+(EIP-3009, no gas); **the facilitator pays gas** when it submits the
+onchain transfer.
+
 ## Step 8 — W4 BONUS: register your agent on ERC-8004 (onchain identity)
 
 ERC-8004 is the onchain agent identity standard. The
@@ -319,6 +374,59 @@ The activity log will show 3 events:
 > and the lookup endpoint recovered it in 0.45s. Gas used: 799556.
 > See the live token at
 > <https://sepolia.basescan.org/token/0x8004A818BFB912233c491871b3d84c89A494BD9e?a=0x4a8FFDA35Fd4463E881a0E69215B547FE8EFCEd4>.
+
+#### Sequence diagram — ERC-8004 register flow
+
+The flow your wallet will go through when you click "Register on 8004":
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Participant<br/>(MetaMask)
+    participant B as Browser<br/>(x402-client.js)
+    participant S as Server<br/>(:3012)
+    participant R as Base Sepolia<br/>IdentityRegistry<br/>0x8004A818...
+    participant BS as BaseScan
+
+    U->>B: Click "Register on 8004"
+    activate B
+    B->>S: GET /agents/<address>
+    activate S
+    S->>R: balanceOf(address) [view]
+    R-->>S: 0 (not registered)
+    S->>S: buildSelfRegistrationURI()
+    Note over S: inline data:application/json;base64,...
+    S-->>B: 200 {registered:false, selfRegistrationURI}
+    deactivate S
+
+    B->>B: viem.encodeFunctionData<br/>(register, [agentURI])
+    B->>U: MetaMask popup:<br/>"Confirm transaction"
+    activate U
+    Note over U: User clicks Confirm<br/>(pays gas from own ETH)
+    U->>R: eth_sendTransaction<br/>(to=registry, data=callData)
+    deactivate U
+    activate R
+    R->>R: register(agentURI)<br/>mint NFT to user
+    R-->>BS: tx mined
+    R-->>B: txHash
+    deactivate R
+
+    loop poll every 2s, max 30 attempts
+      B->>S: GET /agents/<address>
+      S->>R: balanceOf(address)
+      R-->>S: 1
+      S->>R: getLogs(Registered, owner=address)
+      R-->>S: [Registered event]
+      S-->>B: 200 {registered:true, agentId:#N}
+    end
+
+    B-->>U: UI shows "agentId = #N"<br/>+ clickable BaseScan links
+    deactivate B
+```
+
+Each numbered step corresponds to a `logEvent()` entry in the activity
+panel on the workshop UI. The student watches the steps happen in
+real time as the wallet and the blockchain respond.
 
 ### 8.3 — Code: how it works
 

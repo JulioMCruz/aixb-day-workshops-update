@@ -190,7 +190,8 @@ async function payWithX402(task: string, input: string): Promise<{
     throw new Error(`Red incorrecta (${currentChainId}). Cambiá a Base Sepolia primero.`);
   }
 
-  log("info", "Armando signer EIP-3009 con el wallet del usuario...");
+  log("info", "═══ PAY WITH X402 (5 steps) ═══");
+  log("info", "[1/5] Armando signer EIP-3009 con el wallet del usuario...");
   const wc = walletClient;
   if (!wc) {
     throw new Error("Wallet no disponible");
@@ -210,7 +211,6 @@ async function payWithX402(task: string, input: string): Promise<{
     },
     undefined
   );
-
   const fetchWithPayment = wrapFetchWithPaymentFromConfig(fetch, {
     schemes: [
       {
@@ -219,16 +219,35 @@ async function payWithX402(task: string, input: string): Promise<{
       }
     ]
   });
+  log("ok", "  ↳ signer EIP-3009 listo (network: eip155:84532 = Base Sepolia)");
 
-  log("info", "POST /jobs sin firma (esperando 402)...");
+  log("info", "[2/5] POST /jobs sin firma (esperando HTTP 402 con PAYMENT-REQUIRED)...");
   const initial = await fetch("/jobs", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ task, input })
   });
-  log(initial.status === 402 ? "ok" : "info", `Initial: ${initial.status} (esperábamos 402)`);
+  log(initial.status === 402 ? "ok" : "warn", `  ↳ Initial: ${initial.status} (esperábamos 402)`);
 
-  log("info", "Firmando EIP-3009 con tu wallet y reenviando al facilitator...");
+  // Decode and log the PAYMENT-REQUIRED challenge so the student sees what the
+  // server is asking for.
+  const prHeader = initial.headers.get("payment-required");
+  if (prHeader) {
+    try {
+      const decoded = JSON.parse(atob(prHeader)) as {
+        accepts?: Array<{ network?: string; maxAmountRequired?: string; asset?: string; payTo?: string }>;
+      };
+      const first = decoded.accepts?.[0];
+      if (first) {
+        const amount = first.maxAmountRequired ? (Number(first.maxAmountRequired) / 1e6).toFixed(6) : "?";
+        log("info", `  ↳ PAYMENT-REQUIRED: network=${first.network ?? "?"}, asset=${first.asset?.slice(0, 10) ?? "?"}..., amount=${amount} USDC, payTo=${first.payTo?.slice(0, 10) ?? "?"}...`);
+      }
+    } catch {
+      // Ignore decode errors.
+    }
+  }
+
+  log("info", "[3/5] Firmando EIP-3009 (TransferWithAuthorization) con tu wallet y reenviando al facilitator...");
   const response = await fetchWithPayment("/jobs", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -236,7 +255,7 @@ async function payWithX402(task: string, input: string): Promise<{
   });
 
   const status = response.status;
-  log(status === 201 ? "ok" : "warn", `Final response: ${status} ${response.statusText}`);
+  log(status === 201 ? "ok" : "warn", `[4/5] Final response: ${status} ${response.statusText}`);
 
   let body: unknown = null;
   try {
@@ -259,7 +278,7 @@ async function payWithX402(task: string, input: string): Promise<{
       if (decoded.transaction) {
         txHash = decoded.transaction;
         const baseScanUrl = `https://sepolia.basescan.org/tx/${decoded.transaction}`;
-        log("ok", `Tx settled onchain: ${decoded.transaction.slice(0, 20)}...`, {
+        log("ok", `[5/5] Tx settled onchain: ${decoded.transaction}`, {
           url: baseScanUrl,
           text: "BaseScan ↗"
         });
@@ -340,7 +359,7 @@ type Erc8004Register = {
 };
 
 async function lookupAgent8004(address: Address): Promise<Erc8004Lookup> {
-  log("info", `Consultando ERC-8004 IdentityRegistry para ${address.slice(0, 10)}...`);
+  log("info", `[1/3] lookupAgent: leyendo balanceOf(IdentityRegistry, ${address.slice(0, 10)}...)`);
   try {
     const res = await fetch(`/agents/${address}`);
     if (!res.ok) {
@@ -367,12 +386,13 @@ async function lookupAgent8004(address: Address): Promise<Erc8004Lookup> {
     };
 
     if (data.registered) {
-      const idText = data.agentId !== null ? `#${data.agentId}` : "(agentId no escaneado, ver BaseScan)";
-      log("ok", `Agent ERC-8004 registrado: ${idText}`);
+      const idText = data.agentId !== null ? `#${data.agentId}` : "(agentId fuera de ventana de scan, ver BaseScan)";
+      log("ok", `[2/3] balanceOf > 0 → registrado. agentId ${idText}`);
       const baseScanUrl = data.baseScanToken;
-      log("ok", `Token on BaseScan`, { url: baseScanUrl, text: "ver NFT ↗" });
+      log("ok", `[3/3] Token on BaseScan`, { url: baseScanUrl, text: "ver NFT ↗" });
     } else {
-      log("info", "Wallet sin registro ERC-8004. Hay que registrarse onchain.");
+      log("ok", `[2/3] balanceOf = 0 → no registrado todavía`);
+      log("info", `[3/3] Server pre-construyó selfRegistrationURI (${data.selfRegistrationURI?.length ?? 0} chars). Listo para registrar.`);
     }
 
     return {
@@ -415,8 +435,9 @@ async function registerAgent8004(): Promise<Erc8004Register> {
     return { ok: false, txHash: null, agentId: null, baseScanToken: null, error: err };
   }
 
-  // Step 1: ask the server for the agentURI we'd register with.
-  log("info", "Pidiendo agentURI al servidor...");
+  // ── Step 1: server pre-builds the registration JSON + selfRegistrationURI
+  log("info", "═══ REGISTER AGENT (4 steps) ═══");
+  log("info", "[1/4] Pidiendo selfRegistrationURI al servidor...");
   const lookup = await lookupAgent8004(currentAddress);
   if (!lookup.ok) {
     return { ok: false, txHash: null, agentId: null, baseScanToken: null, error: lookup.error };
@@ -437,22 +458,35 @@ async function registerAgent8004(): Promise<Erc8004Register> {
     log("error", err);
     return { ok: false, txHash: null, agentId: null, baseScanToken: null, error: err };
   }
-  log("info", `agentURI listo (length=${agentURI.length} chars)`);
+  // Decode the base64 to show the human-readable registration JSON in the log.
+  try {
+    const b64 = agentURI.replace("data:application/json;base64,", "");
+    const decoded = atob(b64);
+    const json = JSON.parse(decoded);
+    const services = (json.services ?? []).map((s: { name: string }) => s.name).join(", ");
+    log("info", `  ↳ registration JSON: name="${json.name}", services=[${services}], x402Support=${json.x402Support}`);
+  } catch {
+    // Ignore decode errors; the agentURI is still valid.
+  }
+  log("ok", `  ↳ selfRegistrationURI (${agentURI.length} chars, inline data: URI, no IPFS)`);
 
-  // Step 2: encode `register(string)` with viem so we can pass the call
+  // ── Step 2: encode `register(string)` with viem so we can pass the call
   // data straight to eth_sendTransaction. Encoding locally avoids
   // shipping the full ABI to the browser for one function call.
+  log("info", "[2/4] Encodificando register(string) con viem...");
   const { encodeFunctionData } = await import("viem");
   const callData = encodeFunctionData({
     abi: ERC8004_REGISTER_ABI,
     functionName: "register",
     args: [agentURI]
   });
-  log("ok", `Call data encodeado (${callData.length / 2 - 1} bytes)`);
+  log("ok", `  ↳ selector=0xf2c298be (register), call data=${callData.length / 2 - 1} bytes`);
+  log("info", `  ↳ to: ${ERC8004_IDENTITY_REGISTRY_BASESEPOLIA} (IdentityRegistry)`);
+  log("info", `  ↳ from: ${currentAddress}, value: 0 ETH, chainId: 84532`);
 
-  // Step 3: send the transaction. The wallet will pop up for confirmation
+  // ── Step 3: send the transaction. The wallet will pop up for confirmation
   // and pay the gas from the user's own ETH balance.
-  log("info", "Enviando tx al wallet (vas a ver el popup de MetaMask)...");
+  log("info", "[3/4] Enviando tx al wallet (popup de MetaMask para firmar y pagar gas)...");
   const txHash = (await window.ethereum.request({
     method: "eth_sendTransaction",
     params: [
@@ -467,22 +501,31 @@ async function registerAgent8004(): Promise<Erc8004Register> {
   })) as `0x${string}`;
 
   const baseScanTx = `https://sepolia.basescan.org/tx/${txHash}`;
-  log("ok", `Tx enviada: ${txHash.slice(0, 20)}...`, { url: baseScanTx, text: "ver tx ↗" });
+  log("ok", `  ↳ txHash: ${txHash}`, { url: baseScanTx, text: "ver tx pending ↗" });
 
-  // Step 4: poll the server until the agentId is visible (max 60s).
-  log("info", "Esperando confirmación onchain (poll cada 2s)...");
+  // ── Step 4: poll the server until the agentId is visible (max 60s).
+  log("info", "[4/4] Esperando confirmación onchain (poll cada 2s, máximo 30 intentos = 60s)...");
   let agentId: number | null = null;
+  let attempts = 0;
   for (let i = 0; i < 30 && agentId === null; i++) {
     await new Promise((r) => setTimeout(r, 2000));
+    attempts = i + 1;
     const after = await lookupAgent8004(currentAddress);
     if (after.ok && after.registered && after.agentId !== null) {
       agentId = after.agentId;
+    } else if (attempts % 5 === 0) {
+      log("info", `  ↳ poll #${attempts}/30 — aún no indexado, sigo esperando...`);
     }
   }
+  log("ok", `  ↳ server recoveró agentId tras ${attempts} polls`);
 
   if (agentId !== null) {
-    const tokenUrl = `https://sepolia.basescan.org/token/${ERC8004_IDENTITY_REGISTRY_BASESEPOLIA}?a=${agentId}`;
-    log("ok", `¡Agent registrado! agentId = ${agentId}`, { url: tokenUrl, text: "ver NFT ↗" });
+    const tokenUrl = `https://sepolia.basescan.org/token/${ERC8004_IDENTITY_REGISTRY_BASESEPOLIA}?a=${currentAddress}`;
+    log("ok", `  ↳ ¡Agent registrado! agentId = #${agentId}`, { url: tokenUrl, text: "ver NFT ↗" });
+    log("ok", `═══ FIN REGISTER: tx=${txHash} → agentId #${agentId} ═══`, {
+      url: baseScanTx,
+      text: "ver tx mined ↗"
+    });
     return {
       ok: true,
       txHash,
@@ -492,7 +535,10 @@ async function registerAgent8004(): Promise<Erc8004Register> {
     };
   }
 
-  log("warn", "Tx enviada pero agentId no apareció tras 60s. Probá 'Check 8004' en unos segundos.");
+  log("warn", `Tx enviada (${txHash}) pero agentId no apareció tras 60s. Reintentá 'Check 8004' en unos segundos.`, {
+    url: baseScanTx,
+    text: "ver tx ↗"
+  });
   return {
     ok: true,
     txHash,
