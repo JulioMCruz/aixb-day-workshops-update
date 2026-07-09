@@ -120,9 +120,7 @@ settlement.
 ```bash
 npm run wallet:create
 # → writes .aixb-wallet.fixture.json with { privateKey, address }
-```
-
-The script uses viem's `privateKeyToAccount`, which derives the EVM
+```The script uses viem's `privateKeyToAccount`, which derives the EVM
 address from `keccak256(publicKey)` — the same algorithm every EVM
 wallet uses. (Frutero's original script used `sha256(privateKey).slice(-40)`
 which produces a wrong address. We fixed that.)
@@ -301,6 +299,30 @@ The workshop UI exposes a 2-button flow on top of the wallet panel:
   `register(string)`, and asks your wallet to send the transaction.
   You sign in MetaMask / Coinbase Wallet / Rabby and pay gas from
   your own ETH balance.
+
+- **Register seller agent (server-side)** — the workshop's seller
+  wallet (`AGENT_PRIVATE_KEY`) signs and sends the same `register()`
+  tx. The NFT owner is the seller, which matches `X402_PAY_TO`. This
+  is the canonical agent identity for the workshop demo, separate
+  from the user wallet. No MetaMask needed: the server does it.
+  Requires `AGENT_PRIVATE_KEY` to be set in `.env` and the wallet
+  to have ETH for gas. Idempotent: a second click returns the same
+  `agentId` without sending a new tx.
+
+### Two flows, two owners
+
+ERC-8004 design: the owner of the NFT is whoever pays gas. The two
+buttons reflect the two distinct identity questions:
+
+| Button | Who pays gas | NFT owner | Use case |
+|--------|--------------|-----------|----------|
+| Register on 8004 | User's MetaMask | User's wallet | "I, as a user, am also an agent" |
+| Register seller agent (server-side) | Seller wallet (AGENT_PRIVATE_KEY) | Seller wallet (X402_PAY_TO) | "This is the canonical agent that receives x402" |
+
+For the workshop demo, the second flow is the one that demonstrates
+the separation between **user** (pays with EIP-3009) and **agent**
+(has its own onchain identity). User reputation is ephemeral; agent
+reputation persists in the ERC-8004 `ReputationRegistry`.
 
 ### 8.1 — What the server builds for you
 
