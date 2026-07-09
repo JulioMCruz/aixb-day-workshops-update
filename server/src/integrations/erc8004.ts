@@ -2,6 +2,7 @@ import {
   createPublicClient,
   http,
   encodeFunctionData,
+  formatEther,
   parseAbiItem,
   getAddress,
   type Address,
@@ -385,7 +386,20 @@ export interface ServerRegisterResult {
   alreadyRegistered: boolean;
 }
 
-export async function serverRegisterAgent(config: AppConfig): Promise<ServerRegisterResult> {
+// Participant-facing step, replayed by the web UI in the activity log card.
+// Messages are written for workshop participants: what happens, who signs,
+// who pays gas, and where to verify it.
+export type RegisterStep = {
+  level: "info" | "ok" | "warn" | "error";
+  message: string;
+  url?: string;
+  linkText?: string;
+};
+
+export async function serverRegisterAgent(
+  config: AppConfig,
+  onStep: (step: RegisterStep) => void = () => {}
+): Promise<ServerRegisterResult> {
   const pk = config.env.AGENT_PRIVATE_KEY;
   if (!pk) {
     throw new Error("AGENT_PRIVATE_KEY not set in .env");
@@ -397,10 +411,26 @@ export async function serverRegisterAgent(config: AppConfig): Promise<ServerRegi
     chain: baseSepolia,
     transport: http(rpcUrlForBaseSepolia(config))
   });
+  const tokenUrl = `https://sepolia.basescan.org/token/${ERC8004_IDENTITY_REGISTRY_BASESEPOLIA}?a=${owner}`;
+
+  onStep({
+    level: "info",
+    message: `Wallet del agente (seller): ${owner}. El server firma con AGENT_PRIVATE_KEY, tu MetaMask no participa.`
+  });
 
   // 1. If the seller is already registered, return the existing agentId.
+  onStep({
+    level: "info",
+    message: "Paso 1/4: consultando el IdentityRegistry en Base Sepolia. ¿Esta wallet ya tiene identidad de agente?"
+  });
   const existing = await lookupAgent(config, owner);
   if (existing.ok && existing.registered && existing.agentId !== null) {
+    onStep({
+      level: "ok",
+      message: `Ya estaba registrada como agentId #${existing.agentId}. El registro es idempotente: no se envía otra tx y no se gasta gas.`,
+      url: tokenUrl,
+      linkText: "ver NFT en BaseScan"
+    });
     return {
       agentId: existing.agentId,
       txHash: existing.registrationTxHash ?? "0x0",
@@ -409,6 +439,7 @@ export async function serverRegisterAgent(config: AppConfig): Promise<ServerRegi
       alreadyRegistered: true
     };
   }
+  onStep({ level: "ok", message: "No registrada todavía. Vamos a crear la identidad onchain." });
 
   // 2. Build the registration URI with the seller as owner.
   const agentURI = buildSelfRegistrationURI(config, owner);
@@ -416,8 +447,16 @@ export async function serverRegisterAgent(config: AppConfig): Promise<ServerRegi
   // We can't fill the real agentId until after the tx mines, but the
   // log + lookup output will surface the real one.
   const callData = encodeRegisterCallData(agentURI);
+  onStep({
+    level: "info",
+    message: `Paso 2/4: agentURI listo, un JSON con nombre, endpoints y soporte x402 del agente, embebido como data: URI (${agentURI.length} caracteres, sin IPFS ni hosting).`
+  });
 
   // 3. Send the tx from the seller wallet.
+  onStep({
+    level: "info",
+    message: `Paso 3/4: enviando la tx register(agentURI) al IdentityRegistry ${ERC8004_IDENTITY_REGISTRY_BASESEPOLIA.slice(0, 10)}... La wallet del agente paga el gas (testnet).`
+  });
   const walletClient = await import("viem").then((m) =>
     m.createWalletClient({
       account,
@@ -431,16 +470,34 @@ export async function serverRegisterAgent(config: AppConfig): Promise<ServerRegi
     value: 0n,
     chain: baseSepolia
   });
+  onStep({
+    level: "ok",
+    message: `Tx enviada: ${txHash.slice(0, 18)}... Esperando confirmación del bloque.`,
+    url: `https://sepolia.basescan.org/tx/${txHash}`,
+    linkText: "ver tx en BaseScan"
+  });
 
   // 4. Wait for the receipt.
   const receipt = await client.waitForTransactionReceipt({ hash: txHash });
   if (receipt.status !== "success") {
+    onStep({ level: "error", message: `La tx se revirtió onchain: ${txHash}` });
     throw new Error(`register tx reverted: ${txHash}`);
   }
+  const gasEth = formatEther(receipt.gasUsed * receipt.effectiveGasPrice);
+  onStep({
+    level: "ok",
+    message: `Confirmada en el bloque ${receipt.blockNumber}. Costo real: ${receipt.gasUsed} gas, ${gasEth} ETH de testnet.`
+  });
 
   // 5. Look up the new agentId by scanning the Registered event logs
   //    emitted by this tx.
   const agentId = await findAgentIdInReceipt(config, receipt);
+  onStep({
+    level: "ok",
+    message: `Paso 4/4: evento Registered leído del receipt. agentId asignado: #${agentId}. El agente ya tiene su NFT de identidad ERC-8004 a nombre de su propia wallet.`,
+    url: tokenUrl,
+    linkText: "ver NFT en BaseScan"
+  });
   return {
     agentId,
     txHash,

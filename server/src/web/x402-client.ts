@@ -183,8 +183,9 @@ async function payWithX402(task: string, input: string): Promise<{
     throw new Error(`Red incorrecta (${currentChainId}). Cambiá a Base Sepolia primero.`);
   }
 
-  log("info", "═══ PAY WITH X402 (5 steps) ═══");
-  log("info", "[1/5] Armando signer EIP-3009 con el wallet del usuario...");
+  log("info", "═══ PAGO X402 EN VIVO (5 pasos) ═══");
+  log("info", "x402 revive el código HTTP 402 'Payment Required': el server cobra por request y cualquier agente puede pagar solo, sin cuenta ni checkout.");
+  log("info", "[1/5] Preparando el firmador EIP-3009 con tu wallet. Tu wallet solo va a FIRMAR un mensaje: no envía ninguna tx y no paga gas.");
   const wc = walletClient;
   if (!wc) {
     throw new Error("Wallet no disponible");
@@ -212,15 +213,20 @@ async function payWithX402(task: string, input: string): Promise<{
       }
     ]
   });
-  log("ok", "  ↳ signer EIP-3009 listo (network: eip155:84532 = Base Sepolia)");
+  log("ok", "  ↳ Firmador listo. Red: eip155:84532 (Base Sepolia), el pago será en USDC de testnet.");
 
-  log("info", "[2/5] POST /jobs sin firma (esperando HTTP 402 con PAYMENT-REQUIRED)...");
+  log("info", "[2/5] Pidiendo el servicio SIN pagar: POST /jobs sin firma. El server debería rechazarlo con HTTP 402...");
   const initial = await fetch("/jobs", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ task, input })
   });
-  log(initial.status === 402 ? "ok" : "warn", `  ↳ Initial: ${initial.status} (esperábamos 402)`);
+  log(
+    initial.status === 402 ? "ok" : "warn",
+    initial.status === 402
+      ? "  ↳ HTTP 402 Payment Required: el server no ejecuta el job, primero exige el pago."
+      : `  ↳ Respuesta inesperada: ${initial.status} (esperábamos 402).`
+  );
 
   // Decode and log the PAYMENT-REQUIRED challenge so the student sees what the
   // server is asking for.
@@ -233,14 +239,14 @@ async function payWithX402(task: string, input: string): Promise<{
       const first = decoded.accepts?.[0];
       if (first) {
         const amount = first.maxAmountRequired ? (Number(first.maxAmountRequired) / 1e6).toFixed(6) : "?";
-        log("info", `  ↳ PAYMENT-REQUIRED: network=${first.network ?? "?"}, asset=${first.asset?.slice(0, 10) ?? "?"}..., amount=${amount} USDC, payTo=${first.payTo?.slice(0, 10) ?? "?"}...`);
+        log("info", `  ↳ El 402 trae la factura, legible por máquinas (header PAYMENT-REQUIRED): ${amount} USDC en ${first.network ?? "?"} para el agente ${first.payTo?.slice(0, 10) ?? "?"}... Por esto un agente puede decidir y pagar sin humano.`);
       }
     } catch {
       // Ignore decode errors.
     }
   }
 
-  log("info", "[3/5] Firmando EIP-3009 (TransferWithAuthorization) con tu wallet y reenviando al facilitator...");
+  log("info", "[3/5] Firmando la autorización EIP-3009 (transferWithAuthorization): un permiso de un solo uso que dice 'mové estos USDC de mi wallet al seller'. Tu wallet abre un popup de FIRMA, no de transacción.");
   const response = await fetchWithPayment("/jobs", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -248,7 +254,12 @@ async function payWithX402(task: string, input: string): Promise<{
   });
 
   const status = response.status;
-  log(status === 201 ? "ok" : "warn", `[4/5] Final response: ${status} ${response.statusText}`);
+  log(
+    status === 201 ? "ok" : "warn",
+    status === 201
+      ? "[4/5] Reintento con la firma en el header PAYMENT-SIGNATURE. El facilitator verificó la firma, liquidó el pago onchain y el server ejecutó el job (HTTP 201)."
+      : `[4/5] Reintento con firma devolvió ${status} ${response.statusText}.`
+  );
 
   let body: unknown = null;
   try {
@@ -271,14 +282,15 @@ async function payWithX402(task: string, input: string): Promise<{
       if (decoded.transaction) {
         txHash = decoded.transaction;
         const baseScanUrl = `https://sepolia.basescan.org/tx/${decoded.transaction}`;
-        log("ok", `[5/5] Tx settled onchain: ${decoded.transaction}`, {
+        log("ok", `[5/5] Pago liquidado onchain: ${decoded.transaction.slice(0, 18)}...`, {
           url: baseScanUrl,
-          text: "BaseScan ↗"
+          text: "ver tx en BaseScan ↗"
         });
+        log("info", "  ↳ En BaseScan el 'From' de la tx es la wallet del facilitator: él envió la tx y pagó el gas. Tus USDC aparecen en el evento Transfer, de tu wallet al seller.");
       }
       if (decoded.network) network = decoded.network;
       if (decoded.payer) {
-        log("info", `Payer (tu wallet): ${decoded.payer}`);
+        log("info", `  ↳ Payer confirmado (tu wallet): ${decoded.payer}. Solo gastaste los USDC del precio, cero gas.`);
       }
     } catch (e) {
       log("warn", "No se pudo decodificar payment-response header");
@@ -289,19 +301,22 @@ async function payWithX402(task: string, input: string): Promise<{
   const receipt = bodyRecord && typeof bodyRecord.receipt === "object" ? bodyRecord.receipt : null;
   const feedback = bodyRecord && typeof bodyRecord.erc8004Feedback === "object" ? bodyRecord.erc8004Feedback : null;
 
+  if (receipt) {
+    log("ok", "El job devolvió un receipt x402: la prueba de pago que el comprador (humano o agente) puede guardar o auditar.");
+  }
   if (feedback) {
     const fb = feedback as { value?: number; tag1?: string; proofOfPayment?: { txHash?: string } };
     const fbTx = fb.proofOfPayment?.txHash;
     const fbLink = fbTx ? { url: `https://sepolia.basescan.org/tx/${fbTx}`, text: "proof onchain ↗" } : undefined;
     log(
       "ok",
-      `ERC-8004 feedback: value=${fb.value ?? "?"} tag1=${fb.tag1 ?? "?"} txHash=${fbTx?.slice(0, 20) ?? "?"}...`,
+      `Y generó feedback ERC-8004 (value=${fb.value ?? "?"}, tag=${fb.tag1 ?? "?"}): cada pago alimenta la reputación del agente vendedor. Pagos + identidad = confianza entre agentes.`,
       fbLink
     );
   }
 
   if (status !== 201) {
-    log("error", `Pago rechazado: status ${status}`);
+    log("error", `Pago rechazado: status ${status}. Revisá que tu wallet tenga USDC de Base Sepolia y que el switch de pagos esté ON.`);
   }
 
   return {

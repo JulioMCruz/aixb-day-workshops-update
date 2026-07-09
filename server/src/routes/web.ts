@@ -51,7 +51,7 @@ function paymentPanel(config: AppConfig): string {
         <section class="erc8004-panel" id="erc8004-panel" hidden>
           <h3>ERC-8004 identity</h3>
           <p class="hint">
-            Registrá tu wallet como agente onchain en el <code>IdentityRegistry</code> de Base Sepolia. El registro es un NFT ERC-721 con un <code>agentURI</code> que apunta a la metadata de tu agente.
+            Registrá la agent wallet (seller, <code>X402_PAY_TO</code>) como agente onchain en el <code>IdentityRegistry</code> de Base Sepolia. El registro es un NFT ERC-721 con un <code>agentURI</code> que apunta a la metadata del agente. El check y el registro usan la seller wallet, no tu MetaMask.
           </p>
           <div class="button-row">
             <button id="erc8004-check" type="button">Check 8004 registration</button>
@@ -840,9 +840,12 @@ function appPage(config: AppConfig): string {
             return;
           }
 
+          if (!paymentToggle.checked) {
+            logEvent("info", "Gate de pagos APAGADO: el job corre gratis, como demo. Encendé el switch para ver al server cobrar.");
+          }
           logEvent("info", withSignature
-            ? "Click 'Probar con firma x402' → POST /jobs con PAYMENT-SIGNATURE: x402-fixture-paid"
-            : "Click 'Probar sin firma' → POST /jobs sin header de pago");
+            ? "POST /jobs CON el header PAYMENT-SIGNATURE: 'x402-fixture-paid' (una firma simulada, así ves el flujo completo sin wallet ni fondos)."
+            : "POST /jobs SIN header de pago: pedimos el servicio sin pagar, a ver qué dice el server.");
 
           paymentOutput.innerHTML = '<p class="empty">Ejecutando job...</p>';
           const headers = { "content-type": "application/json" };
@@ -860,31 +863,35 @@ function appPage(config: AppConfig): string {
           });
           const data = await response.json();
           const paymentRequired = response.headers.get("PAYMENT-REQUIRED");
-          logEvent(
-            response.ok ? "ok" : "warn",
-            "POST /jobs → " + response.status + " " + (response.ok ? "executed" : "rejected") +
-            (paymentRequired ? " (with PAYMENT-REQUIRED header)" : "")
-          );
+          if (response.status === 402) {
+            logEvent("warn", "HTTP 402 Payment Required: el server NO ejecuta el job. Este código HTTP existe desde 1997 y x402 lo pone a trabajar.");
+          } else {
+            logEvent(
+              response.ok ? "ok" : "warn",
+              "POST /jobs → " + response.status + " " + (response.ok ? "(el server ejecutó el job)" : "(rechazado)")
+            );
+          }
           if (paymentRequired) {
             try {
               const decoded = atob(paymentRequired);
               const parsed = JSON.parse(decoded);
               const accept = parsed && parsed.accepts && parsed.accepts[0];
               if (accept) {
-                logEvent("info", "Decoded 402: scheme=" + accept.scheme + ", amount=" + accept.amount + ", payTo=" + (accept.payTo || "?").slice(0, 10) + "..., network=" + accept.network);
+                logEvent("info", "El 402 incluye la factura legible por máquinas (header PAYMENT-REQUIRED): " + (accept.price || accept.amount || "?") + " a pagar al agente " + (accept.payTo || "?").slice(0, 10) + "... en " + accept.network + ". Un agente puede leerla, decidir y pagar solo.");
+                logEvent("info", "Siguiente paso: reintentar CON firma. Acá una firma fixture, en live mode una firma EIP-3009 real de tu wallet.");
               }
             } catch (e) {
-              logEvent("warn", "Could not decode PAYMENT-REQUIRED header");
+              logEvent("warn", "No se pudo decodificar el header PAYMENT-REQUIRED");
             }
           }
           if (response.ok) {
-            logEvent("ok", "Job completed: " + (data.id || "?") + " (integration=" + (data.integration || "?") + ")");
+            logEvent("ok", "Job " + (data.id || "?").slice(0, 8) + "... completado (modo: " + (data.integration || "?") + "). El server cobró primero y trabajó después.");
             if (data.receipt) {
-              logEvent("ok", "x402 receipt: verified=" + data.receipt.verified + ", network=" + data.receipt.network);
+              logEvent("ok", "Receipt x402 en la respuesta (verified=" + data.receipt.verified + ", tipo=" + data.receipt.type + "): la prueba de pago que el comprador puede guardar o auditar.");
             }
             if (data.erc8004Feedback) {
               const fb = data.erc8004Feedback;
-              logEvent("ok", "ERC-8004 feedback: value=" + fb.value + " tag1=" + fb.tag1 + " tag2=" + fb.tag2);
+              logEvent("ok", "Feedback ERC-8004 (value=" + fb.value + ", tag=" + fb.tag1 + "): cada pago alimenta la reputación del agente vendedor. Pagos + identidad = confianza entre agentes.");
             }
           }
           paymentOutput.innerHTML =
@@ -978,11 +985,14 @@ function appPage(config: AppConfig): string {
             logEvent("error", "Wallet client no cargado. Refrescá la página.");
             return;
           }
-          const addr = window.aixbWallet.getAddress();
+          // The agent identity belongs to the seller wallet (X402_PAY_TO),
+          // not to the participant's connected wallet.
+          const addr = agentWalletAddress;
           if (!addr) {
-            logEvent("error", "Primero conectá tu wallet.");
+            logEvent("error", "Agent wallet no configurada. Definí X402_PAY_TO o AGENT_PRIVATE_KEY en server/.env.");
             return;
           }
+          logEvent("info", "Check 8004 para la agent wallet (seller): " + addr);
           if (erc8004Check) erc8004Check.disabled = true;
           try {
             const result = await window.aixbWallet.lookupAgent8004(addr);
@@ -1023,24 +1033,35 @@ function appPage(config: AppConfig): string {
           const btn = erc8004RegisterServer;
           if (btn) btn.disabled = true;
           try {
-            logEvent("info", "═══ REGISTER SELLER AGENT (server-side) ═══");
-            logEvent("info", "[1/3] Enviando POST /agents/register-server. AGENT_PRIVATE_KEY firma y paga gas.");
+            logEvent("info", "═══ REGISTRAR AGENTE VENDEDOR (ERC-8004, server-side) ═══");
+            logEvent("info", "La identidad se registra a nombre de la agent wallet (seller), no de tu MetaMask. El server firma y paga el gas.");
+            logEvent("info", "POST /agents/register-server enviado. La tx en Base Sepolia tarda 5-10 segundos, esperá...");
             const response = await fetch("/agents/register-server", { method: "POST" });
             const data = await response.json();
+            // El server devuelve su log paso a paso; lo reproducimos en la card
+            // para que el participante vea qué hizo el server en su nombre.
+            if (Array.isArray(data.log)) {
+              for (const step of data.log) {
+                logEvent(step.level || "info", step.message, step.url ? { url: step.url, text: step.linkText || step.url } : undefined);
+              }
+            }
             if (!response.ok || !data.ok) {
               throw new Error(data.error || ("HTTP " + response.status));
             }
-            logEvent("ok", "[2/3] Tx settled: " + data.txHash, { url: "https://sepolia.basescan.org/tx/" + data.txHash, text: "ver tx en BaseScan" });
-            logEvent("ok", "[3/3] Seller agent registrado: owner=" + data.owner + " agentId=#" + data.agentId + (data.alreadyRegistered ? " (ya estaba registrado)" : ""));
-            logEvent("ok", "Ver NFT: " + data.baseScanToken);
-            logEvent("info", "═══ FIN REGISTER SELLER: agentId=#" + data.agentId + " ═══");
+            logEvent("ok", "═══ LISTO: agente " + data.owner.slice(0, 10) + "... registrado con agentId #" + data.agentId + " ═══");
             if (erc8004Output) {
               erc8004Output.hidden = false;
               erc8004Output.className = "erc8004-output registered";
-              erc8004Output.textContent = "SELLER AGENT REGISTRADO\\n  owner: " + data.owner + "\\n  agentId: #" + data.agentId + "\\n  txHash: " + data.txHash + "\\n  BaseScan: " + data.baseScanToken;
+              erc8004Output.textContent =
+                "AGENTE REGISTRADO ONCHAIN\\n" +
+                "  wallet del agente (owner): " + data.owner + "\\n" +
+                "  agentId: #" + data.agentId + (data.alreadyRegistered ? " (ya existía, no se gastó gas)" : " (nuevo)") + "\\n" +
+                "  tx: " + (data.alreadyRegistered ? "(ninguna, registro previo)" : data.txHash) + "\\n" +
+                "  NFT en BaseScan: " + data.baseScanToken;
             }
           } catch (err) {
-            logEvent("error", "register-seller failed: " + (err.message || err));
+            logEvent("error", "El registro falló: " + (err.message || err));
+            logEvent("info", "Checklist: ¿AGENT_PRIVATE_KEY está en server/.env? ¿La agent wallet tiene ETH de Base Sepolia para el gas?");
             if (erc8004Output) {
               erc8004Output.hidden = false;
               erc8004Output.className = "erc8004-output error";

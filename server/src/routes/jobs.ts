@@ -4,7 +4,7 @@ import type { Network } from "@x402/core/types";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { paymentMiddleware } from "@x402/hono";
 import type { Context, MiddlewareHandler } from "hono";
-import { createAgentRegistration, createFeedback, lookupAgent, buildSelfRegistrationURI, serverRegisterAgent, ERC8004_IDENTITY_REGISTRY_BASESEPOLIA } from "../integrations/erc8004.js";
+import { createAgentRegistration, createFeedback, lookupAgent, buildSelfRegistrationURI, serverRegisterAgent, ERC8004_IDENTITY_REGISTRY_BASESEPOLIA, type RegisterStep } from "../integrations/erc8004.js";
 import { readWallet } from "../integrations/wallet.js";
 import {
   createPaymentRequired,
@@ -213,19 +213,23 @@ export function registerJobRoutes(app: App, config: AppConfig): void {
   app.post("/agents/register-server", async (c) => {
     const unavailable = requireStage(c, config, 4);
     if (unavailable) return unavailable;
+    // Step-by-step log replayed in the web activity card so participants
+    // can follow what the server did on their behalf (same pattern as /x402/pay).
+    const steps: RegisterStep[] = [];
     if (!config.env.AGENT_PRIVATE_KEY) {
-      return c.json({ ok: false, error: "AGENT_PRIVATE_KEY not set in .env" }, 400);
+      return c.json({ ok: false, error: "AGENT_PRIVATE_KEY not set in .env", log: steps }, 400);
     }
     try {
-      const result = await serverRegisterAgent(config);
+      const result = await serverRegisterAgent(config, (step) => steps.push(step));
       return c.json({
         ok: true,
         ...result,
-        baseScanToken: `https://sepolia.basescan.org/token/${ERC8004_IDENTITY_REGISTRY_BASESEPOLIA}?a=${result.owner}`
+        baseScanToken: `https://sepolia.basescan.org/token/${ERC8004_IDENTITY_REGISTRY_BASESEPOLIA}?a=${result.owner}`,
+        log: steps
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return c.json({ ok: false, error: message }, 500);
+      return c.json({ ok: false, error: message, log: steps }, 500);
     }
   });
 
@@ -239,7 +243,7 @@ export function registerJobRoutes(app: App, config: AppConfig): void {
       protocol: "x402",
       paymentsEnabled,
       mode,
-      agentWallet: config.env.X402_PAY_TO?.trim() ?? null,
+      agentWallet: x402PayTo(config, "") || null,
       toggle: "POST /payment-mode",
       fixturePaymentSignature: "x402-fixture-paid"
     });
